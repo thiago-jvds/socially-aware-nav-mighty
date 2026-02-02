@@ -439,10 +439,10 @@ def compute_J_vel_constr_jax(CP, T, env_params):
         J_vel: Velocity violation cost
     """
     V_max = env_params['V_max']
-    N_samp = env_params['N_samp']
+    N_per_seg = env_params.get('N_per_seg', 3)
 
-    # Sample velocities
-    _, vels, _ = eval_traj_and_derivs_jax(CP, T, N_samp)
+    # Sample velocities using differentiable method
+    _, vels, _, _ = sample_trajectory_jax(CP, T, N_per_seg)
     vel_norms = jnp.linalg.norm(vels, axis=1)
 
     # Penalty: max(||v|| - V_max, 0)³
@@ -467,10 +467,10 @@ def compute_J_acc_constr_jax(CP, T, env_params):
         J_acc: Acceleration violation cost
     """
     A_max = env_params['A_max']
-    N_samp = env_params['N_samp']
+    N_per_seg = env_params.get('N_per_seg', 3)
 
-    # Sample accelerations
-    _, _, accs = eval_traj_and_derivs_jax(CP, T, N_samp)
+    # Sample accelerations using differentiable method
+    _, _, accs, _ = sample_trajectory_jax(CP, T, N_per_seg)
     acc_norms = jnp.linalg.norm(accs, axis=1)
 
     # Penalty: max(||a|| - A_max, 0)³
