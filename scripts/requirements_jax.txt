@@ -1,0 +1,14 @@
+# JAX and dependencies for differentiable MIGHTY
+jax>=0.4.20
+jaxlib>=0.4.20
+jaxopt>=0.8.0
+numpy>=1.24.0
+
+# Optional: for ONNX export (Phase 5)
+# torch>=2.0.0
+# onnx>=1.14.0
+# onnxruntime>=1.15.0
+
+# Optional: for neural network training (Phases 3-4)
+# flax>=0.7.0
+# optax>=0.1.7
