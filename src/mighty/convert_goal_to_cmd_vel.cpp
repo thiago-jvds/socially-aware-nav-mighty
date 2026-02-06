@@ -18,7 +18,8 @@ GoalToCmdVel::GoalToCmdVel() : Node("goal_to_cmd_vel"),
     this->declare_parameter("ground_robot_kx", 1.0);
     this->declare_parameter("ground_robot_ky", 1.0);
     this->declare_parameter("ground_robot_kyaw", 1.0);
-    this->declare_parameter("ground_robot_kdyaw", 1.0);
+    this->declare_parameter("ground_robot_kdyaw", 0.1);
+    this->declare_parameter("ground_robot_ki", 0.1);
     this->declare_parameter("ground_robot_eps", 1e-2);
 
     state_.pos.x = this->get_parameter("x").as_double();
@@ -48,7 +49,6 @@ GoalToCmdVel::GoalToCmdVel() : Node("goal_to_cmd_vel"),
 
     std::cout << "kx_: " << kx_ << std::endl;
     std::cout << "ky_: " << ky_ << std::endl;
-    std::cout << "ki_: " << ky_ << std::endl;
     std::cout << "kyaw_: " << kyaw_ << std::endl;
     std::cout << "kdyaw_: " << kdyaw_ << std::endl;
     std::cout << "eps_: " << eps_ << std::endl;
@@ -81,6 +81,7 @@ GoalToCmdVel::GoalToCmdVel() : Node("goal_to_cmd_vel"),
     eyawd_filtered_ = 0.0;
     total_err_ = 0.0;
     prev_time_ = this->now().seconds();
+
 }
 
 void GoalToCmdVel::stateCallback(const dynus_interfaces::msg::State::SharedPtr msg)
@@ -99,44 +100,62 @@ void GoalToCmdVel::goalCallback(const dynus_interfaces::msg::Goal::SharedPtr msg
     goal_initialized_ = true;
 }
 
+
 void GoalToCmdVel::cmdVelCallback()
 {
     if (!state_initialized_ || !goal_initialized_) return;
 
-    geometry_msgs::msg::Twist twist;
+    else{
+        geometry_msgs::msg::Twist twist;
 
-    double x_desired = goal_.p.x;
-    double y_desired = goal_.p.y;
-    double xd_desired = goal_.v.x;
-    double yd_desired = goal_.v.y;
-    double yaw_desired = goal_.yaw;
-    double yawd_desired = goal_.dyaw;
+        double x_desired = goal_.p.x;
+        double y_desired = goal_.p.y;
+        double xd_desired = goal_.v.x;
+        double yd_desired = goal_.v.y;
+        double yaw_desired = goal_.yaw;
+        double yawd_desired = goal_.dyaw;
 
-    double v_desired = std::sqrt(xd_desired * xd_desired + yd_desired * yd_desired);
+        double v_desired = std::sqrt(xd_desired * xd_desired + yd_desired * yd_desired);
 
-    // Compute errors in desired frame
-    double ex = std::cos(yaw_desired) * (state_.pos.x - x_desired) + std::sin(yaw_desired) * (state_.pos.y - y_desired);
-    double ey = -std::sin(yaw_desired) * (state_.pos.x - x_desired) + std::cos(yaw_desired) * (state_.pos.y - y_desired);
-    double eyaw = current_yaw_ - yaw_desired;
+        // compute yaw desired based on velocity vector
+        yaw_desired = std::atan2(yd_desired, xd_desired);
 
-    // Compute control commands
-    double v_command = v_desired * std::cos(eyaw) - kx_ * ex;
-    double yawd_command = yawd_desired - v_desired * (ky_ * ey + std::sin(eyaw)) / std::sqrt(ey*ey + eps_*eps_) - kyaw_ * eyaw;
+        // Compute errors in desired frame
+        double ex = std::cos(yaw_desired) * (state_.pos.x - x_desired) + std::sin(yaw_desired) * (state_.pos.y - y_desired);
+        double ey = -std::sin(yaw_desired) * (state_.pos.x - x_desired) + std::cos(yaw_desired) * (state_.pos.y - y_desired);
+        double eyaw = wrapPi(current_yaw_ - yaw_desired);
 
-    // Clip control commands. This helped improve robustness; modify as needed
-    // v_command = std::clamp(v_command, 0.0, 2.0);
-    // yawd_command = std::clamp(yawd_command, -0.5, 0.5);
+        double now = this->now().seconds();
+        double dt = now - prev_time_;
+        total_err_ += ex * dt; // for integral
 
-    twist.linear.x = v_command;
-    twist.angular.z = yawd_command;
+        // yaw damping
+        double eyawd = (eyaw - prev_yaw_) / dt;
 
-    pub_cmd_vel_->publish(twist);
+        prev_yaw_ = eyaw;
+        prev_time_ = now;
+
+        // compute v and yaw commands
+        double v_command = v_desired - kx_ * ex;
+        double yawd_command = - v_desired * (ky_ * ey + std::sin(eyaw)) / std::sqrt(ey*ey + eps_*eps_) - kyaw_ * eyaw - kdyaw_ * eyawd;
+
+        // Clip control commands. This helped improve robustness; modify as needed
+        v_command = std::clamp(v_command, 0.0, 2.0);
+        yawd_command = std::clamp(yawd_command, -1.0, 1.0);
+
+        twist.linear.x = v_command;
+        twist.angular.z = yawd_command;
+
+        pub_cmd_vel_->publish(twist);
+    }
+    
 }
 
 double GoalToCmdVel::wrapPi(double x)
 {
-    x = std::fmod(x + M_PI, 2 * M_PI);
-    return x - M_PI < 0 ? x - M_PI : x - M_PI;
+    x = std::fmod(x, 2 * M_PI);
+
+    return x > M_PI ? x - 2 * M_PI : (x <= -M_PI ? x + 2 * M_PI : x);
 }
 
 int main(int argc, char *argv[])
