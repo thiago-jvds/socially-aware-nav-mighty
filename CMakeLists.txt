@@ -28,6 +28,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(dynus_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(gazebo_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(gazebo_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -100,6 +101,32 @@ add_library(imu_plugin SHARED src/sim/gazebo_ros_imu_sensor.cpp)
 target_link_libraries(imu_plugin ${GAZEBO_LIBRARIES})
 ament_target_dependencies(imu_plugin sensor_msgs gazebo_ros)
 
+# CA tracker prediction node
+add_executable(CA_obstacle_tracker_prediction_node 
+  src/mighty/trackers/CA_obstacle_tracker_prediction_node.cpp src/mighty/utils.cpp src/dgp/utils.cpp
+)
+target_link_libraries(CA_obstacle_tracker_prediction_node ${PCL_LIBRARIES})
+
+ament_target_dependencies(CA_obstacle_tracker_prediction_node 
+  rclcpp 
+  rclcpp_components 
+  visualization_msgs 
+  vision_msgs           
+  Eigen3                
+  std_msgs 
+  dynus_interfaces
+  tf2_geometry_msgs 
+  tf2 
+  tf2_ros 
+  tf2_eigen 
+)
+
+# For fake sim perception node
+add_executable(fake_sim_perception_node src/mighty/trackers/fake_sim_perception_node.cpp)
+target_link_libraries(fake_sim_perception_node)
+ament_target_dependencies(fake_sim_perception_node rclcpp nav_msgs vision_msgs visualization_msgs)
+
+
 # For dynamic forest node
 add_executable(dynamic_forest_node src/sim/dynamic_forest_node.cpp)
 ament_target_dependencies(dynamic_forest_node
@@ -134,6 +161,8 @@ install(TARGETS
   convert_vicon_to_state
   convert_velodyne_to_ros_time
   dynamic_forest_node
+  CA_obstacle_tracker_prediction_node
+  fake_sim_perception_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

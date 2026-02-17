@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<robot name="human_box" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="namespace" default="human_0" />
+  <xacro:arg name="traj_x" default="0.0" />
+  <xacro:arg name="traj_y" default="0.0" />
+  <xacro:arg name="traj_z" default="0.0" />
+
+  <material name="human_blue">
+    <color rgba="0.0 0.4 0.8 1"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="70.0" />
+      <origin xyz="0 0 0.9" rpy="0 0 0" />
+      <inertia ixx="22.6" ixy="0" ixz="0" iyy="21.0" iyz="0" izz="5.8" />
+    </inertial>
+    
+    <visual>
+        <origin xyz="0 0 0.9" rpy="0 0 0" />
+        <geometry>
+          <box size="0.6 0.8 1.8"/>
+        </geometry>
+        <material name="human_blue"/>
+    </visual>
+    
+    <collision>
+        <origin xyz="0 0 0.9" rpy="0 0 0" />
+        <geometry>
+          <box size="0.6 0.8 1.8"/>
+        </geometry>
+    </collision>
+  </link>
+
+  <gazebo reference="base_link">
+    <gravity>0</gravity>
+    <material>Gazebo/Blue</material>
+  </gazebo>
+
+  <gazebo>
+    <plugin name="move_model" filename="libmove_model.so">
+      <traj_x>$(arg traj_x)</traj_x>
+      <traj_y>$(arg traj_y)</traj_y>
+      <traj_z>$(arg traj_z)</traj_z>
+    </plugin>
+  </gazebo>
+
+  <gazebo>
+    <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>$(arg namespace)</namespace>
+        <remapping>odom:=ground_truth</remapping>
+      </ros>
+      <body_name>base_link</body_name>
+      <frame_name>map</frame_name>
+      <update_rate>30.0</update_rate>
+      <xyz_offset>0 0 0</xyz_offset>
+      <rpy_offset>0 0 0</rpy_offset>
+      <gaussian_noise>0.0</gaussian_noise>
+    </plugin>
+  </gazebo>
+
+ </robot>

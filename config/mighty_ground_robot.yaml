@@ -37,8 +37,8 @@ mighty_node:
         x_max: 1000.0                                           # [m] x_max of the map
         y_min: -1000.0                                          # [m] y_min of the map
         y_max: 1000.0                                           # [m] y_max of the map
-        z_min: -5.0                                              # [m] points below this are considered ground
-        z_max: 5.0                                              # [m] DGP is run with resolution=factor_dgp*(resolution of the map)
+        z_min: -0.2                                              # [m] points below this are considered ground
+        z_max: 0.8                                             # [m] DGP is run with resolution=factor_dgp*(resolution of the map)
         dgp_timeout_duration_ms: 10000                          # [ms] Timeout duration for the DGP
         use_free_start: true                                    # [-] Use free start for the DGP
         free_start_factor: 1.0                                  # [-] Factor for the free start
@@ -66,9 +66,9 @@ mighty_node:
         num_N: 3                                    # [-] Number of trajectory pieces for local optimization
         horizon: 15.0                               # [m] Horizon
         dc: 0.01                                    # [s] Duration for the interpolation=Value of the timer pubGoal
-        v_max: 1.0                                  # [m/s]  max velocity
+        v_max: 2.0                                  # [m/s]  max velocity
         a_max: 5.0                                 # [m/s2] max acceleration
-        j_max: 10.0                                 # [m/s3] max jerk
+        j_max: 15.0                                 # [m/s3] max jerk
         dynamic_weight: 1e+3                        # [-] Weight of the obstacles and agents distance in the optimization
         time_weight: 1e+3                           # [-] Weight of the time cost in the optimization
         pos_anchor_weight: 0.0                      # [-] Weight of the position anchors in the optimization
@@ -82,7 +82,7 @@ mighty_node:
         dyn_constr_thrust_weight: 0.0               # [-] Weight of the thrust constraints violation in the optimization
         num_dyn_obst_samples: 10                    # [-] Number of samples for the dynamic obstacles in the optimization
         planner_Co: 0.3                             # [-] Collision clearance thresh for static obstacles in the optimization
-        planner_Cw: 1.3                             # [-] Collision clearance thresh for dynamic obstacles in the optimization
+        planner_Cw: 3.0                             # [-] Collision clearance thresh for dynamic obstacles in the optimization
         drone_bbox: [0.5, 0.5, 0.5]                 # [m] Size of the bounding box for the obstacles
         goal_radius: 0.5                           # [m] Radius of the goal
         goal_seen_radius: 5.0                       # [m] Radius of the goal that the drone can see and stop replanning. Note that if this number is too small, the trajectory planning becomes extremely difficult.
@@ -129,9 +129,9 @@ mighty_node:
         default_goal_z: 0.0                     # [m] Default goal height (ground level)
         
         # Debug flags
-        global_planner_verbose: false           # debug output
+        global_planner_verbose: true           # debug output
         debug_verbose: true                    # [-] Verbose the debug information
-        closed_form_traj_verbose: false         # Verbosity of closed-form traj.
+        closed_form_traj_verbose: true         # Verbosity of closed-form traj.
         verbose_computation_time: false         # [-] Verbose the computation time
 
         # Map parameters

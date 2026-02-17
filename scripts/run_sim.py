@@ -155,7 +155,7 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
         {
             'shell_command': [
                 'source /usr/share/gazebo/setup.bash',
-                f'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=false '
+                f'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=true '
                 f'use_gazebo_gui:={str(use_gazebo_gui).lower()} use_rviz:={str(use_rviz).lower()} '
                 f'env:={env} use_ground_robot:={str(use_ground_robot).lower()}'
             ]
@@ -343,6 +343,7 @@ def main():
             'ACL_office': 'ACL_office',
             'easy_forest': 'easy_forest',
             'hard_forest': 'hard_forest',
+            'empty_corridor': 'empty_corridor',
         }
         world_name = env_to_world_mapping.get(args.env, args.env)
 

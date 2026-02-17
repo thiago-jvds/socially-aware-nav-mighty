@@ -142,7 +142,7 @@ def generate_launch_description():
                     remappings=[('lidar_cloud_in', lidar_point_cloud_topic),
                                 ('depth_camera_cloud_in', f'{depth_camera_name}/depth/color/points')],
                     arguments=['--ros-args', '--log-level', 'error'],
-                    # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
+                    prefix='xterm -e gdb -q -ex run --args', # gdb debugging
         )
 
         # Robot state publisher node

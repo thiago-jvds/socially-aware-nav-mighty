@@ -1583,10 +1583,6 @@ bool MIGHTY::checkReadyToReplan()
                                  // && kdtree_unk_initialized_
                                  ));
 
-  // if (!is_ready) printf("\033[1;31mNot ready to replan: state_initialized_=%d, terminal_goal_initialized_=%d, map_initialized_=%d, kdtree_map_initialized_=%d\033[0m\n",
-  //                            state_initialized_, terminal_goal_initialized_,
-  //                            dgp_manager_.isMapInitialized(),
-  //                            kdtree_map_initialized_ /*, kdtree_unk_initialized_*/);
 }
 
 // ----------------------------------------------------------------------------

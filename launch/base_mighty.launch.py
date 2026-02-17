@@ -68,6 +68,7 @@ def generate_launch_description():
             'medium_forest': 'medium_forest.world',
             'hard_forest': 'hard_forest.world',
             'dynamic_forest': 'dynamic_forest.world',
+            'empty_corridor': 'empty_corridor.world',
         }
 
         # Choose the world file based on the provided environment.
@@ -113,26 +114,42 @@ def generate_launch_description():
         )
 
         # Number of dynamic obstacles
-        num_dyn_obstacles = 100 if env_value in ["empty_wo_ground"] else 50
+        num_dyn_obstacles = 10 if env_value in ["empty_wo_ground"] else 10
 
         # Dynamic obstacles
-        dynamic_obstacles_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles.launch.py'])
-            ),
-            launch_arguments={"num_obstacles": f"{num_dyn_obstacles}",
-                                "publish_rate_hz": "50.0",
-                                "seed": "0",
-                                "launch_forest_node":"true",
-                                "forest_start_delay":"2.0",
-                                "spawn_interval": "1.0",
-                                }.items()
-        )
+        if use_dyn_obs:
+            dynamic_obstacles_launch = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles.launch.py'])
+                ),
+                launch_arguments={"num_obstacles": f"{num_dyn_obstacles}",
+                                    "publish_rate_hz": "50.0",
+                                    "seed": "0",
+                                    "launch_forest_node":"true",
+                                    "forest_start_delay":"2.0",
+                                    "spawn_interval": "1.0",
+                                    }.items()
+            )
+
+        peds_obstacles_launch = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles_pedestrians.launch.py'])
+                ),
+                launch_arguments={
+                    "num_obstacles": "10",
+                    "mode": "ONE_WAY_X",
+                    "urdf_xacro": "human_box.urdf.xacro",
+                    "spawn_interval": "1.0",
+                    "use_sim_time": 'true',
+                    "seed": '31',
+                }.items()
+            )
 
         # Return launch description
         nodes_to_start = [gazebo_launch]
         nodes_to_start.append(rviz_node) if use_rviz else None
-        nodes_to_start.append(dynamic_obstacles_launch) if use_dyn_obs else None
+        # nodes_to_start.append(dynamic_obstacles_launch) if use_dyn_obs else None
+        nodes_to_start.append(peds_obstacles_launch) 
 
         return nodes_to_start
 
