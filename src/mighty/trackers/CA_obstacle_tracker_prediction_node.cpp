@@ -109,7 +109,12 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
     // Reserve memory to prevent invalidation during push_back
     ekf_states_.reserve(ekf_states_.size() + current_measurements.size());
 
-    // --- Step 3: Association & Update ---
+    // --- Step 3: Predict for current tracks --
+    for (auto& state : ekf_states_) {
+        ekf_predict(state, adaptive_kf_dt_); 
+    }
+    
+    // --- Step 4: Association & Update ---
     if (!use_hungarian_matching_) {
         for (auto& meas : current_measurements)
         {
@@ -121,8 +126,7 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
     
             if (match_idx >= 0) {
                 // MATCH FOUND
-                ekf_predict(ekf_states_[match_idx], adaptive_kf_dt_);
-                
+
                 // Pass 'raw_bbox' to the update function
                 aekf_update(ekf_states_[match_idx], meas.centroid, adaptive_kf_alpha_, 
                             this->now().seconds(), raw_bbox, use_adaptive_kf_);
@@ -154,7 +158,7 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
         }
 
     } else {
-        // O(max(current_meas.size(), ekf_states_.size())³)
+        // O(max(current_meas.size(), ekf_states_.size())^3) (for max_N ~ 10 detections, 1000 ops, negligible)
         std::vector<int> assignments = associate_measurement_hungarian(current_measurements, ekf_states_, cluster_tolerance_);
         
         for (int i = 0; i < static_cast<int>(assignments.size()); i++){
@@ -163,8 +167,6 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
             Eigen::Vector3d raw_bbox = meas.assigned_ekf_state.bbox;
 
             if (match_idx >= 0) {
-                // MATCH FOUND
-                ekf_predict(ekf_states_[match_idx], adaptive_kf_dt_);
                 
                 // Pass 'raw_bbox' to the update function
                 aekf_update(ekf_states_[match_idx], meas.centroid, adaptive_kf_alpha_, 
@@ -174,7 +176,8 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
                 meas.assigned_ekf_state = ekf_states_[match_idx];
                 meas.has_match = true;
             } 
-            else {
+            else 
+            {
                 // NEW TRACK
                 Eigen::MatrixXd Q_avg(9,9), R_avg(3,3);
                 calculateAverageQandR(Q_avg, R_avg);
@@ -197,8 +200,7 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
         }
     }
 
-
-    // --- Step 4: Publish ---
+    // --- Step 5: Publish ---
     publishPredictions(current_measurements);
 }
 
@@ -209,11 +211,10 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
 
 void CAObstacleTrackerPredictionNode::deleteOldEKFstates() {
     double current_time = this->now().seconds();
-    double time_threshold = 2.0; // Seconds to persist lost tracks
     
     auto it = ekf_states_.begin();
     while (it != ekf_states_.end()) {
-        if ((current_time - it->time_last_updated) > time_threshold) {
+        if ((current_time - it->time_last_updated) > time_to_delete_old_obstacles_) {
             it = ekf_states_.erase(it);
         } else {
             ++it;
