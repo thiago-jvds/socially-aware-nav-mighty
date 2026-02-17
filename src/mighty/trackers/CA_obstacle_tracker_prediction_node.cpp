@@ -39,7 +39,6 @@ CAObstacleTrackerPredictionNode::CAObstacleTrackerPredictionNode()
 : Node("CA_obstacle_tracker_prediction_node") 
 {
 
-    std::string tracker_id = "CA";
     // 1. Parameters
     this->declare_parameter("visual_level", 1);
     this->declare_parameter("use_adaptive_kf", false);
@@ -77,7 +76,7 @@ CAObstacleTrackerPredictionNode::CAObstacleTrackerPredictionNode()
         "detected_objects", 10, 
         std::bind(&CAObstacleTrackerPredictionNode::detectionsCallback, this, _1));
 
-    pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(tracker_id + "_tracked_obstacles", 10);
+    pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("tracked_obstacles", 10);
     pub_predicted_traj_ = this->create_publisher<dynus_interfaces::msg::DynTraj>("predicted_trajs", 10);
 
     pred_pos_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("predicted_positions", 10);
@@ -113,7 +112,7 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
     for (auto& state : ekf_states_) {
         ekf_predict(state, adaptive_kf_dt_); 
     }
-    
+
     // --- Step 4: Association & Update ---
     if (!use_hungarian_matching_) {
         for (auto& meas : current_measurements)
