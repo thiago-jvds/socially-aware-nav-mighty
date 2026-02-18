@@ -53,7 +53,6 @@ CAObstacleTrackerPredictionNode::CAObstacleTrackerPredictionNode()
     this->declare_parameter("dynus_map_res", 0.5);
     this->declare_parameter("velocity_threshold", 0.0);
     this->declare_parameter("acceleration_threshold", 0.1);
-    this->declare_parameter("use_hungarian_matching", false);
 
     // Set parameters
     visual_level_ = this->get_parameter("visual_level").as_int();
@@ -65,7 +64,6 @@ CAObstacleTrackerPredictionNode::CAObstacleTrackerPredictionNode()
     prediction_dt_ = this->get_parameter("prediction_dt").as_double();
     time_to_delete_old_obstacles_ = this->get_parameter("time_to_delete_old_obstacles").as_double();
     use_life_time_for_box_visualization_ = this->get_parameter("use_life_time_for_box_visualization").as_bool();
-    use_hungarian_matching_ = this->get_parameter("use_hungarian_matching").as_bool();
     box_visualization_duration_ = this->get_parameter("box_visualization_duration").as_double();
     dynus_map_res_ = this->get_parameter("dynus_map_res").as_double();
     velocity_threshold_ = this->get_parameter("velocity_threshold").as_double();
@@ -114,88 +112,43 @@ void CAObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg:
     }
 
     // --- Step 4: Association & Update ---
-    if (!use_hungarian_matching_) {
-        for (auto& meas : current_measurements)
-        {
-            // 3a. Retrieve the RAW bbox we stored in Step 1
-            Eigen::Vector3d raw_bbox = meas.assigned_ekf_state.bbox;
+    std::vector<int> assignments = associate_measurements(current_measurements, ekf_states_, cluster_tolerance_);
     
-            // 3b. Find Match
-            int match_idx = associate_measurement_with_ekf(meas.centroid, ekf_states_, cluster_tolerance_);
-    
-            if (match_idx >= 0) {
-                // MATCH FOUND
+    for (int i = 0; i < static_cast<int>(assignments.size()); i++){
+        int match_idx = assignments[i];
+        auto& meas = current_measurements[i];
+        Eigen::Vector3d raw_bbox = meas.assigned_ekf_state.bbox;
 
-                // Pass 'raw_bbox' to the update function
-                aekf_update(ekf_states_[match_idx], meas.centroid, adaptive_kf_alpha_, 
-                            this->now().seconds(), raw_bbox, use_adaptive_kf_);
-                
-                // Overwrite the placeholder state with the REAL filtered state
-                meas.assigned_ekf_state = ekf_states_[match_idx];
-                meas.has_match = true;
-            } 
-            else {
-                // NEW TRACK
-                Eigen::MatrixXd Q_avg(9,9), R_avg(3,3);
-                calculateAverageQandR(Q_avg, R_avg);
-                
-                // Use 'raw_bbox' to initialize the new state
-                EKFState new_state(9, Q_avg, R_avg, this->now().seconds(), raw_bbox, ekf_state_id_++);
-                new_state.x = Eigen::VectorXd::Zero(9); 
-                new_state.x.head(3) = meas.centroid;
-    
-                new_state.P.block(0, 0, 3, 3) *= 1.0;   // initial position uncertainty
-                new_state.P.block(3, 3, 3, 3) *= 10.0;  // initial velocity uncertainty
-                new_state.P.block(6, 6, 3, 3) *= 10.0;  // initial acceleration uncertainty
-                
-                ekf_states_.push_back(new_state);
-                
-                // Store the new state in the measurement
-                meas.assigned_ekf_state = new_state;
-                meas.has_match = true;
-            }
-        }
-
-    } else {
-        // O(max(current_meas.size(), ekf_states_.size())^3) (for max_N ~ 10 detections, 1000 ops, negligible)
-        std::vector<int> assignments = associate_measurement_hungarian(current_measurements, ekf_states_, cluster_tolerance_);
+        if (match_idx >= 0) {
+            
+            // Pass 'raw_bbox' to the update function
+            aekf_update(ekf_states_[match_idx], meas.centroid, adaptive_kf_alpha_, 
+                        this->now().seconds(), raw_bbox, use_adaptive_kf_);
+            
+            // Overwrite the placeholder state with the REAL filtered state
+            meas.assigned_ekf_state = ekf_states_[match_idx];
+            meas.has_match = true;
         
-        for (int i = 0; i < static_cast<int>(assignments.size()); i++){
-            int match_idx = assignments[i];
-            auto& meas = current_measurements[i];
-            Eigen::Vector3d raw_bbox = meas.assigned_ekf_state.bbox;
+        } else {
 
-            if (match_idx >= 0) {
-                
-                // Pass 'raw_bbox' to the update function
-                aekf_update(ekf_states_[match_idx], meas.centroid, adaptive_kf_alpha_, 
-                            this->now().seconds(), raw_bbox, use_adaptive_kf_);
-                
-                // Overwrite the placeholder state with the REAL filtered state
-                meas.assigned_ekf_state = ekf_states_[match_idx];
-                meas.has_match = true;
-            } 
-            else 
-            {
-                // NEW TRACK
-                Eigen::MatrixXd Q_avg(9,9), R_avg(3,3);
-                calculateAverageQandR(Q_avg, R_avg);
-                
-                // Use 'raw_bbox' to initialize the new state
-                EKFState new_state(9, Q_avg, R_avg, this->now().seconds(), raw_bbox, ekf_state_id_++);
-                new_state.x = Eigen::VectorXd::Zero(9); 
-                new_state.x.head(3) = meas.centroid;
-    
-                new_state.P.block(0, 0, 3, 3) *= 1.0;   // initial position uncertainty
-                new_state.P.block(3, 3, 3, 3) *= 10.0;  // initial velocity uncertainty
-                new_state.P.block(6, 6, 3, 3) *= 10.0;  // initial acceleration uncertainty
-                
-                ekf_states_.push_back(new_state);
-                
-                // Store the new state in the measurement
-                meas.assigned_ekf_state = new_state;
-                meas.has_match = true;
-            }
+            // NEW TRACK
+            Eigen::MatrixXd Q_avg(9,9), R_avg(3,3);
+            calculateAverageQandR(Q_avg, R_avg);
+            
+            // Use 'raw_bbox' to initialize the new state
+            EKFState new_state(9, Q_avg, R_avg, this->now().seconds(), raw_bbox, ekf_state_id_++);
+            new_state.x = Eigen::VectorXd::Zero(9); 
+            new_state.x.head(3) = meas.centroid;
+
+            new_state.P.block(0, 0, 3, 3) *= 1.0;   // initial position uncertainty
+            new_state.P.block(3, 3, 3, 3) *= 10.0;  // initial velocity uncertainty
+            new_state.P.block(6, 6, 3, 3) *= 10.0;  // initial acceleration uncertainty
+            
+            ekf_states_.push_back(new_state);
+            
+            // Store the new state in the measurement
+            meas.assigned_ekf_state = new_state;
+            meas.has_match = true;
         }
     }
 
@@ -221,28 +174,11 @@ void CAObstacleTrackerPredictionNode::deleteOldEKFstates() {
     }
 }
 
-int CAObstacleTrackerPredictionNode::associate_measurement_with_ekf(const Eigen::Vector3d& centroid, 
-    const std::vector<EKFState>& ekf_states, 
-    double tolerance){
-    int closest_idx = -1;
-    double min_dist = std::numeric_limits<double>::max();
-
-    for (size_t i = 0; i < ekf_states.size(); ++i) {
-        // EKF Position is first 3 elements of state vector x
-        double dist = (ekf_states[i].x.head(3) - centroid).norm();
-        if (dist < min_dist) {
-            min_dist = dist;
-            closest_idx = static_cast<int>(i);
-        }
-    }
-
-    if (min_dist <= tolerance) {
-        return closest_idx;
-    }
-    return -1;
-}
-
-std::vector<int> CAObstacleTrackerPredictionNode::associate_measurement_hungarian(
+/*   
+ * @brief // O(max(current_meas.size(), ekf_states_.size())^3)
+ * (for max_N ~ 10 detections, 1000 ops, negligible)
+ */
+std::vector<int> CAObstacleTrackerPredictionNode::associate_measurements(
     const std::vector<Measurement>& new_detections,
     const std::vector<EKFState>& ekf_states,
     double tolerance

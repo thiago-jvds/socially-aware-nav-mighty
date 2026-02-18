@@ -71,10 +71,7 @@ private:
 
     // EKF Core Math
     void deleteOldEKFstates();
-    int associate_measurement_with_ekf(const Eigen::Vector3d& centroid, 
-                                       const std::vector<EKFState>& ekf_states, 
-                                       double tolerance);
-    std::vector<int> associate_measurement_hungarian(
+    std::vector<int> associate_measurements(
         const std::vector<Measurement>& new_detections,
         const std::vector<EKFState>& ekf_states,
         double tolerance);
@@ -118,7 +115,6 @@ private:
     double box_visualization_duration_;
     double dynus_map_res_;
     int visual_level_;
-    bool use_hungarian_matching_;
     std::string tracking_frame_;
 };
 
