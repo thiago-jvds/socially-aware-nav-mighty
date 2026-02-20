@@ -121,10 +121,38 @@ ament_target_dependencies(CA_obstacle_tracker_prediction_node
   tf2_eigen 
 )
 
+# IMM tracker prediction node
+add_executable(IMM_obstacle_tracker_prediction_node 
+  src/mighty/trackers/IMM_obstacle_tracker_prediction_node.cpp src/mighty/utils.cpp src/dgp/utils.cpp
+)
+target_link_libraries(IMM_obstacle_tracker_prediction_node ${PCL_LIBRARIES})
+
+ament_target_dependencies(IMM_obstacle_tracker_prediction_node 
+  rclcpp 
+  rclcpp_components 
+  visualization_msgs 
+  vision_msgs           
+  Eigen3                
+  std_msgs 
+  dynus_interfaces
+  tf2_geometry_msgs 
+  tf2 
+  tf2_ros 
+  tf2_eigen 
+)
+
+
 # For fake sim perception node
 add_executable(fake_sim_perception_node src/mighty/trackers/fake_sim_perception_node.cpp)
 target_link_libraries(fake_sim_perception_node)
 ament_target_dependencies(fake_sim_perception_node rclcpp nav_msgs vision_msgs visualization_msgs)
+
+
+# For bag reading
+add_executable(bag_perception_node src/mighty/trackers/bag_perception_node.cpp)
+target_link_libraries(bag_perception_node)
+ament_target_dependencies(bag_perception_node rclcpp geometry_msgs vision_msgs visualization_msgs)
+
 
 
 # For dynamic forest node
@@ -162,7 +190,9 @@ install(TARGETS
   convert_velodyne_to_ros_time
   dynamic_forest_node
   CA_obstacle_tracker_prediction_node
+  IMM_obstacle_tracker_prediction_node
   fake_sim_perception_node
+  bag_perception_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
