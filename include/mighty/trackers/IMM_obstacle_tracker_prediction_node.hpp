@@ -68,9 +68,9 @@ struct IMMTrack {
         int num_modes = NUM_MODES; 
         
         // Push your specific derived models
+        models.push_back(std::make_shared<CVModel>(state_dim, meas_dim, 0.01, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
         models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
-        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_LEFT));
-        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_RIGHT));
+        models.push_back(std::make_shared<SingerModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
 
         // Sync initial state to all models
         for (auto& model : models) {
@@ -170,13 +170,8 @@ private:
     int state_dim_ = 9;
     int meas_dim_ = 3;      // x, y, z only
 
-
-    double sigma_a_CA_      = 0.5;
-    double sigma_yaw_CA_    = 0.5;
-    double fixed_yaw_rate_    = 0.4;
-
     std::string frame_id_ = "map";
-
+    
     bool tracker_debug_ = true;
     
     // Parameters
@@ -194,11 +189,14 @@ private:
     double dynus_map_res_;
     int visual_level_;
     std::string tracking_frame_;
-    bool use_2d_predictions_;
-
+    
     // IMM specific params
     double prob_transition_stay_; // Prob of staying in current mode
     double prob_transition_switch_; // Prob of switching
+
+    double sigma_a_CA_      = 1.5;
+    double sigma_yaw_CA_    = 0.5;
+    double fixed_yaw_rate_    = 0.6;
 };
 
 #endif // IMM_OBSTACLE_TRACKER_PREDICTION_NODE_HPP_

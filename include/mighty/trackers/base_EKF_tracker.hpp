@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <vector>
 #include <memory>
+#include <algorithm>
 #include <cmath>
 #include <std_msgs/msg/color_rgba.hpp>
 
@@ -134,9 +135,11 @@ public:
         double v  = x(3), th = x(4), ph = x(5);
         double a  = x(6);
 
+        setQ(dt);
+
         switch (mode_) {
             case MODE_FWD:
-                x(7) = 0.0;
+                x(7) = std::clamp(x(7), -0.2, 0.2);
                 break;
             case MODE_LEFT:
                 x(7) = fixed_yaw_rate_;
@@ -145,8 +148,6 @@ public:
                 x(7) = -fixed_yaw_rate_;
                 break;
         }
-
-        setQ(dt);
 
         // 1. Predict Kinematics
         double dist_step = v * dt + 0.5 * a * dt * dt;
@@ -176,6 +177,190 @@ public:
         F(1, 4) = dist_step * c_ph * c_th;
 
         F(3, 6) = dt;
+
+        // 3. Update Covariance
+        P = F * P * F.transpose() + Q;
+    }
+};
+
+class CVModel : public BaseEKFModel {
+private:
+    double var_v_;
+    double var_yaw_;
+    double fixed_yaw_rate_;
+    Mode mode_;
+public:
+    CVModel(int state_dim, int meas_dim, double sigma_v, double sigma_yaw_rate, double fixed_yaw_rate, Mode mode) 
+    : BaseEKFModel(state_dim, meas_dim),
+      var_v_ (sigma_v * sigma_v),
+      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate),
+      fixed_yaw_rate_ (fixed_yaw_rate),
+      mode_ (mode) {}
+
+    void setQ(double dt) {
+        Q.setZero();
+        double dt2 = dt * dt;
+        double dt3 = dt2 * dt;
+
+        // Position noise 
+        Q(0,0) = 0.5 * dt3 * var_v_;    // x
+        Q(1,1) = 0.5 * dt3 * var_v_;    // y
+        Q(2,2) = 0.5 * dt3 * var_v_;    // z
+        
+        // Velocity noise
+        Q(3,3) = dt2 * var_v_;          // v
+        
+        // Acceleration noise is strictly ZERO for a pure CV model
+        Q(6,6) = 0.0;
+
+        // Angular Rate Coupling
+        Q(4,4) = dt2 * var_yaw_;     // theta
+        Q(7,7) = var_yaw_;           // theta_dot
+    };
+
+    void predict(double dt) override {
+        double px = x(0), py = x(1), pz = x(2);
+        double v  = x(3), th = x(4), ph = x(5);
+
+        setQ(dt);
+
+        switch (mode_) {
+            case MODE_FWD:   x(7) = std::clamp(x(7), -0.2, 0.2); break;
+            case MODE_LEFT:  x(7) = fixed_yaw_rate_; break;
+            case MODE_RIGHT: x(7) = -fixed_yaw_rate_; break;
+        }
+
+        // 1. Predict Kinematics
+        double dist_step = v * dt;
+        
+        x(0) = px + dist_step * cos(ph) * cos(th);
+        x(1) = py + dist_step * cos(ph) * sin(th);
+        x(2) = pz + dist_step * sin(ph);
+        x(3) = v ;
+        x(4) = normalize_angle(th + x(7) * dt);
+        x(6) = 0.0;
+        x(8) = 0.0;
+
+        // 2. Jacobian Matrix (F)
+        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
+        
+        double s_th = sin(th), c_th = cos(th);
+        double s_ph = sin(ph), c_ph = cos(ph);
+        double d_dist_dv = dt;
+        double d_dist_da = 0.5 * dt * dt;
+
+        F(0, 3) = d_dist_dv * c_ph * c_th;      
+        F(0, 4) = -dist_step * c_ph * s_th;     
+        
+        F(1, 3) = d_dist_dv * c_ph * s_th;
+        F(1, 4) = dist_step * c_ph * c_th;
+
+        F(2, 3) = dt * s_ph;
+
+        // 3. Update Covariance
+        P = F * P * F.transpose() + Q;
+    }
+};
+
+class SingerModel : public BaseEKFModel {
+private:
+    double var_a_;
+    double var_yaw_;
+    double fixed_yaw_rate_;
+    double alpha_;
+    Mode mode_;
+public:
+    SingerModel(int state_dim, int meas_dim, double sigma_a, double sigma_yaw_rate, double fixed_yaw_rate, Mode mode) 
+    : BaseEKFModel(state_dim, meas_dim),
+      var_a_ (sigma_a * sigma_a),
+      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate),
+      fixed_yaw_rate_ (fixed_yaw_rate),
+      alpha_ (0.5),
+      mode_ (mode) {}
+
+    void setQ(double dt) {
+        Q.setZero();
+        double dt2 = dt * dt;
+        double dt3 = dt2 * dt;
+        double dt4 = dt3 * dt;
+
+        Q(0,0) = 0.25 * dt4 * var_a_;    // x
+        Q(0,3) = 0.5 * dt3 * var_a_;     // x-v correlation
+        Q(3,0) = 0.5 * dt3 * var_a_;
+        Q(3,3) = dt2 * var_a_;           // v
+        
+        Q(1,1) = 0.25 * dt4 * var_a_;    // y
+        Q(1,3) = 0.5 * dt3 * var_a_;     // y-v correlation
+        Q(3,1) = 0.5 * dt3 * var_a_;
+
+        Q(2,2) = 0.25 * dt4 * var_a_;    // z
+        Q(2,3) = 0.5 * dt3 * var_a_;     // z-v correlation
+        Q(3,2) = 0.5 * dt3 * var_a_;
+
+        // Acceleration noise
+        Q(6,6) = var_a_;
+        
+        // Angular Rate Coupling
+        Q(4,4) = dt2 * var_yaw_;     // theta
+        Q(7,7) = var_yaw_;           // theta_dot
+    };
+
+    void predict(double dt) override {
+        double px = x(0), py = x(1), pz = x(2);
+        double v  = x(3), th = x(4), ph = x(5);
+        double a  = x(6);
+
+        setQ(dt);
+
+        switch (mode_) {
+            case MODE_FWD:   x(7) = std::clamp(x(7), -0.2, 0.2); break;
+            case MODE_LEFT:  x(7) = fixed_yaw_rate_; break;
+            case MODE_RIGHT: x(7) = -fixed_yaw_rate_; break;
+        }
+
+        // 1. Exact Singer Kinematics
+        double c = alpha_ * dt;
+        double exp_c = std::exp(-c);
+        double alpha2 = alpha_ * alpha_;
+
+        // Exact integrals for distance, velocity, and decayed acceleration
+        double dist_step = v * dt + (a / alpha2) * (exp_c + c - 1.0);
+        double v_new = v + (a / alpha_) * (1.0 - exp_c);
+        double a_new = a * exp_c; 
+        
+        x(0) = px + dist_step * cos(ph) * cos(th);
+        x(1) = py + dist_step * cos(ph) * sin(th);
+        x(2) = pz + dist_step * sin(ph);
+        x(3) = v_new; 
+        x(4) = normalize_angle(th + x(7) * dt);
+        x(6) = a_new; 
+        x(8) = 0.0;
+
+        // 2. Exact Singer Jacobian Matrix (F)
+        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
+        
+        double s_th = sin(th), c_th = cos(th);
+        double s_ph = sin(ph), c_ph = cos(ph);
+
+        // New partial derivatives based on Singer integration
+        double d_dist_dv = dt;
+        double d_dist_da = (exp_c + c - 1.0) / alpha2;
+        double d_v_da    = (1.0 - exp_c) / alpha_;
+        double d_a_da    = exp_c;
+
+        F(0, 3) = d_dist_dv * c_ph * c_th;      
+        F(0, 6) = d_dist_da * c_ph * c_th;      
+        F(0, 4) = -dist_step * c_ph * s_th;     
+        
+        F(1, 3) = d_dist_dv * c_ph * s_th;
+        F(1, 6) = d_dist_da * c_ph * s_th;
+        F(1, 4) = dist_step * c_ph * c_th;
+
+        F(2, 3) = d_dist_dv * s_ph;
+        F(2, 6) = d_dist_da * s_ph;
+
+        F(3, 6) = d_v_da;
+        F(6, 6) = d_a_da;
 
         // 3. Update Covariance
         P = F * P * F.transpose() + Q;

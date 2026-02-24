@@ -55,10 +55,9 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     this->declare_parameter("acceleration_threshold", 0.1);
 
     // IMM Tuning Parameters
-    this->declare_parameter("prob_transition_stay", 0.95);   // High probability to stay in current mode
-    this->declare_parameter("prob_transition_switch", 0.05); // Low probability to switch
+    this->declare_parameter("prob_transition_stay", 0.85);   // High probability to stay in current mode
+    this->declare_parameter("prob_transition_switch", 0.15); // Low probability to switch
 
-    this->declare_parameter("use_2d_predictions", true);
 
     // Set parameters
     visual_level_ = this->get_parameter("visual_level").as_int();
@@ -76,8 +75,6 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     acceleration_threshold_ = this->get_parameter("acceleration_threshold").as_double();
     prob_transition_stay_ = this->get_parameter("prob_transition_stay").as_double();
     prob_transition_switch_ = this->get_parameter("prob_transition_switch").as_double();
-    use_2d_predictions_ = this->get_parameter("use_2d_predictions").as_bool();
-
 
     // 2. Pub/Sub
     sub_detections_ = this->create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -445,10 +442,12 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
     // Update bounding box
     track.bbox = 0.5 * track.bbox + (1 - 0.5) * bbox;
 
-    RCLCPP_INFO(this->get_logger(), 
-        "Track [%d] Probabilities -> FWD: %.2f, LEFT: %.2f, RIGHT: %.2f",
-        track.id, track.mode_probs(0), track.mode_probs(1), 
-    track.mode_probs(2));
+    if (tracker_debug_) {
+        RCLCPP_INFO(this->get_logger(), 
+            "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, SINGER: %.2f",
+            track.id, track.mode_probs(0), track.mode_probs(1), 
+        track.mode_probs(2));
+    }
     
 }
         
@@ -504,7 +503,9 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
     if  (a > 8.0) a = 8.0;
     if (a < -8.0) a = -8.0;
 
-    RCLCPP_INFO(this->get_logger(), " [Track %d] v: %.3f, a: %.3f, th: %.3f", track.id, v, a);
+    if (tracker_debug_) {
+        RCLCPP_INFO(this->get_logger(), " [Track %d] v: %.3f, a: %.3f, th: %.3f, th_d: %.3f", track.id, v, a, th, th_d);
+    }
 
     // --- 3. Step-by-Step Integration ---
     for (int step = 0; step < num_steps; ++step) {
@@ -551,7 +552,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         track.mode_probs.maxCoeff(&best_mode);
 
         if (tracker_debug_) {
-            std::string mode_names[] = {"FWD", "LEFT", "RIGHT"};
+            std::string mode_names[] = {"CV", "CA", "SINGER"};
 
             // --- 2. Determine Color Based on Mode ---
             std_msgs::msg::ColorRGBA mode_color;
