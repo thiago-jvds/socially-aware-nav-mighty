@@ -157,6 +157,24 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
 
         if (match_idx >= 0) {
             IMMTrack& matched_track = tracks_[match_idx];
+
+            // cold start velocity and heading
+            if (matched_track.is_first_meas) { 
+                matched_track.is_first_meas = false;
+
+                double dx = centroid(0) - matched_track.models[0]->x(0); 
+                double dy = centroid(1) - matched_track.models[0]->x(1);
+
+                double initial_heading = std::atan2(dy, dx);
+                
+                double dt = this->now().seconds() - matched_track.time_last_updated;
+                double initial_velocity = std::sqrt(dx*dx + dy*dy) / dt;
+
+                for (int m = 0; m < NUM_MODES; ++m) {
+                    matched_track.models[m]->x(3) = initial_velocity;
+                    matched_track.models[m]->x(4) = initial_heading;
+                }
+            }
             
             update(matched_track, centroid, 
                 adaptive_kf_alpha_, this->now().seconds(), raw_bbox);
@@ -173,9 +191,7 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
                 centroid, raw_bbox, track_id_++,
                 sigma_a_CA_,
                 sigma_yaw_CA_,
-                sigma_a_CTRV_,
-                sigma_yaw_CTRV_,
-                th_threshold_);
+                fixed_yaw_rate_);
 
             tracks_.push_back(new_track);            
             

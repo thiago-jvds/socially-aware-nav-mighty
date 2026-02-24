@@ -16,12 +16,6 @@
 
 const int NUM_MODES = 3;
 
-enum Mode {
-    MODE_FWD = 0,
-    MODE_LEFT = 1,
-    MODE_RIGHT = 2,
-};
-
 // --- IMM Struct ---
 // Holds the history/prediction of an object
 struct IMMTrack {
@@ -43,17 +37,19 @@ struct IMMTrack {
     Eigen::VectorXd likelihoods;
     Eigen::VectorXd c_bar;
 
+    bool is_first_meas;
+
     IMMTrack() {}
     IMMTrack(int state_dim, int meas_dim, double time, const Eigen::Vector3d& centroid, const Eigen::Vector3d& bbox_in,
-        int id_in, double sigma_a_CA, double sigma_yaw_CA, double sigma_a_CTRV, double sigma_yaw_CTRV, double th_threshold) {
+        int id_in, double sigma_a_CA, double sigma_yaw_CA, double fixed_yaw_rate) {
         id = id_in++;
         time_last_updated = time;
         bbox = bbox_in;
+        is_first_meas = true;
 
         // Setup Main State
         x = Eigen::VectorXd::Zero(state_dim);
         x.head(3) = centroid;
-        x(3) = 0.5; // Min Velocity
 
         // Set P
         P = Eigen::MatrixXd::Identity(state_dim, state_dim);
@@ -72,9 +68,9 @@ struct IMMTrack {
         int num_modes = NUM_MODES; 
         
         // Push your specific derived models
-        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA));
-        models.push_back(std::make_shared<CTRVModel>(state_dim, meas_dim, true, th_threshold, sigma_a_CTRV, sigma_yaw_CTRV));     // LEFT turn model
-        models.push_back(std::make_shared<CTRVModel>(state_dim, meas_dim, false, th_threshold, sigma_a_CTRV, sigma_yaw_CTRV));    // RIGHT turn model
+        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
+        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_LEFT));
+        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_RIGHT));
 
         // Sync initial state to all models
         for (auto& model : models) {
@@ -175,11 +171,9 @@ private:
     int meas_dim_ = 3;      // x, y, z only
 
 
-    double sigma_a_CA_      = 2.0;
+    double sigma_a_CA_      = 0.5;
     double sigma_yaw_CA_    = 0.5;
-    double sigma_a_CTRV_    = 0.5;
-    double sigma_yaw_CTRV_  = 0.3;
-    double th_threshold_    = 0.05;
+    double fixed_yaw_rate_    = 0.4;
 
     std::string frame_id_ = "map";
 
