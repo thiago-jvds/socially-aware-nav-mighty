@@ -66,6 +66,18 @@ public:
         Eigen::MatrixXd K = P * H.transpose() * S.inverse();
 
         x = x + K * y_res;
+
+        // force positive velocity
+        if (x(3) < 0.0) {
+            x(3) = std::abs(x(3));               
+            x(4) = x(4) + M_PI;                  // Flip heading by 180 degrees
+            x(5) = -x(5);                        // Invert pitch
+        }
+
+        // Normalize the angles to prevent IMM mixing explosions
+        x(4) = normalize_angle(x(4)); 
+        x(5) = normalize_angle(x(5));
+
         Eigen::MatrixXd I = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
         P = (I - K * H) * P;
 
@@ -85,6 +97,37 @@ public:
 
     void setR(const Eigen::MatrixXd& R) {
         this->R = R;
+    }
+
+    Eigen::MatrixXd getF(
+        double th, double ph, double d_dist_dv, double d_dist_da, 
+        double d_v_da, double d_a_da, double dist_step, double dt) {
+        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
+        
+        double s_th = sin(th), c_th = cos(th);
+        double s_ph = sin(ph), c_ph = cos(ph);
+
+        F(0, 3) = d_dist_dv * c_ph * c_th;          // dx_new/dv
+        F(0, 6) = d_dist_da * c_ph * c_th;          // dx_new/da
+        F(0, 4) = -dist_step * c_ph * s_th;         // dx_new/dtheta
+        F(0, 5) = -dist_step * s_ph * c_th;         // dx_new/dphi
+        
+        F(1, 3) = d_dist_dv * c_ph * s_th;          // dy_new/dv
+        F(1, 6) = d_dist_da * c_ph * s_th;          // dy_new/da
+        F(1, 4) = dist_step * c_ph * c_th;          // dy_new/dtheta
+        F(1, 5) = -dist_step * s_ph * s_th;         // dy_new/dphi
+
+        F(2, 3) = d_dist_dv * s_ph;                 // dz_new/dv
+        F(2, 6) = d_dist_da * s_ph;                 // dz_new/da
+        F(2, 5) = dist_step * c_ph;                 // dz_new/dphi
+
+        F(3, 6) = d_v_da;                           // dv_new/da
+        F(6, 6) = d_a_da;                           // da_new/da
+
+        F(4, 7) = dt;                               // dtheta_new/dtheta_d
+        F(5, 8) = dt;                               // dphi_new/dphi_d
+
+        return F;
     }
 
 };
@@ -127,7 +170,7 @@ public:
         
         // Angular Rate Coupling
         Q(4,4) = dt2 * var_yaw_;     // theta
-        Q(7,7) = var_yaw_;           // theta_dot
+        Q(7,7) = 1e-6;           // theta_dot
     };
 
     void predict(double dt) override {
@@ -137,18 +180,6 @@ public:
 
         setQ(dt);
 
-        switch (mode_) {
-            case MODE_FWD:
-                x(7) = std::clamp(x(7), -0.2, 0.2);
-                break;
-            case MODE_LEFT:
-                x(7) = fixed_yaw_rate_;
-                break;
-            case MODE_RIGHT:
-                x(7) = -fixed_yaw_rate_;
-                break;
-        }
-
         // 1. Predict Kinematics
         double dist_step = v * dt + 0.5 * a * dt * dt;
         
@@ -156,27 +187,24 @@ public:
         x(1) = py + dist_step * cos(ph) * sin(th);
         x(2) = pz + dist_step * sin(ph);
         x(3) = v + a * dt;
-        x(4) = normalize_angle(th + x(7) * dt);
+        x(4) = th;
+        x(5) = ph;
         x(6) = a;
+
+        // No turning
+        x(7) = 0.0;
         x(8) = 0.0;
 
         // 2. Jacobian Matrix (F)
-        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        
-        double s_th = sin(th), c_th = cos(th);
-        double s_ph = sin(ph), c_ph = cos(ph);
         double d_dist_dv = dt;
         double d_dist_da = 0.5 * dt * dt;
-
-        F(0, 3) = d_dist_dv * c_ph * c_th;      
-        F(0, 6) = d_dist_da * c_ph * c_th;      
-        F(0, 4) = -dist_step * c_ph * s_th;     
+        double d_v_da    = dt;
+        double d_a_da    = 1.0; // Acceleration is constant, new_a = old_a
         
-        F(1, 3) = d_dist_dv * c_ph * s_th;
-        F(1, 6) = d_dist_da * c_ph * s_th;
-        F(1, 4) = dist_step * c_ph * c_th;
+        Eigen::MatrixXd F = getF(th, ph, d_dist_dv, d_dist_da, d_v_da, d_a_da, dist_step, dt);
 
-        F(3, 6) = dt;
+        F(4, 7) = 0.0; // dth/dth_d = 0
+        F(5, 8) = 0.0; // dph/dph_d = 0
 
         // 3. Update Covariance
         P = F * P * F.transpose() + Q;
@@ -211,11 +239,11 @@ public:
         Q(3,3) = dt2 * var_v_;          // v
         
         // Acceleration noise is strictly ZERO for a pure CV model
-        Q(6,6) = 0.0;
+        Q(6,6) = 1e-6;
 
         // Angular Rate Coupling
         Q(4,4) = dt2 * var_yaw_;     // theta
-        Q(7,7) = var_yaw_;           // theta_dot
+        Q(7,7) = 1e-6;           // theta_dot
     };
 
     void predict(double dt) override {
@@ -224,38 +252,33 @@ public:
 
         setQ(dt);
 
-        switch (mode_) {
-            case MODE_FWD:   x(7) = std::clamp(x(7), -0.2, 0.2); break;
-            case MODE_LEFT:  x(7) = fixed_yaw_rate_; break;
-            case MODE_RIGHT: x(7) = -fixed_yaw_rate_; break;
-        }
-
         // 1. Predict Kinematics
         double dist_step = v * dt;
         
         x(0) = px + dist_step * cos(ph) * cos(th);
         x(1) = py + dist_step * cos(ph) * sin(th);
         x(2) = pz + dist_step * sin(ph);
-        x(3) = v ;
-        x(4) = normalize_angle(th + x(7) * dt);
-        x(6) = 0.0;
+        x(3) = v;   // v constant
+        x(4) = th;  // th constant
+        x(5) = ph;  // ph constant
+
+        // No acc, th_d, ph_d
+        x(6) = 0.0; 
+        x(7) = 0.0;
         x(8) = 0.0;
 
         // 2. Jacobian Matrix (F)
-        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        
-        double s_th = sin(th), c_th = cos(th);
-        double s_ph = sin(ph), c_ph = cos(ph);
         double d_dist_dv = dt;
-        double d_dist_da = 0.5 * dt * dt;
+        double d_dist_da = 0.0;      
+        double d_v_da    = 0.0;      
+        double d_a_da    = 0.0;     
 
-        F(0, 3) = d_dist_dv * c_ph * c_th;      
-        F(0, 4) = -dist_step * c_ph * s_th;     
-        
-        F(1, 3) = d_dist_dv * c_ph * s_th;
-        F(1, 4) = dist_step * c_ph * c_th;
+        Eigen::MatrixXd F = getF(th, ph, d_dist_dv, d_dist_da, d_v_da, d_a_da, dist_step, dt);        
 
-        F(2, 3) = dt * s_ph;
+        F(3, 6) = 0.0; // dv/da     = 0
+        F(4, 7) = 0.0; // dth/dth_d = 0
+        F(5, 8) = 0.0; // dph/dph_d = 0
+        F(6, 6) = 0.0; // da/da     = 0
 
         // 3. Update Covariance
         P = F * P * F.transpose() + Q;
@@ -312,12 +335,6 @@ public:
 
         setQ(dt);
 
-        switch (mode_) {
-            case MODE_FWD:   x(7) = std::clamp(x(7), -0.2, 0.2); break;
-            case MODE_LEFT:  x(7) = fixed_yaw_rate_; break;
-            case MODE_RIGHT: x(7) = -fixed_yaw_rate_; break;
-        }
-
         // 1. Exact Singer Kinematics
         double c = alpha_ * dt;
         double exp_c = std::exp(-c);
@@ -333,179 +350,19 @@ public:
         x(2) = pz + dist_step * sin(ph);
         x(3) = v_new; 
         x(4) = normalize_angle(th + x(7) * dt);
+        x(5) = normalize_angle(ph + x(8) * dt);
         x(6) = a_new; 
         x(8) = 0.0;
 
         // 2. Exact Singer Jacobian Matrix (F)
-        Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        
-        double s_th = sin(th), c_th = cos(th);
-        double s_ph = sin(ph), c_ph = cos(ph);
-
-        // New partial derivatives based on Singer integration
         double d_dist_dv = dt;
         double d_dist_da = (exp_c + c - 1.0) / alpha2;
         double d_v_da    = (1.0 - exp_c) / alpha_;
         double d_a_da    = exp_c;
 
-        F(0, 3) = d_dist_dv * c_ph * c_th;      
-        F(0, 6) = d_dist_da * c_ph * c_th;      
-        F(0, 4) = -dist_step * c_ph * s_th;     
-        
-        F(1, 3) = d_dist_dv * c_ph * s_th;
-        F(1, 6) = d_dist_da * c_ph * s_th;
-        F(1, 4) = dist_step * c_ph * c_th;
-
-        F(2, 3) = d_dist_dv * s_ph;
-        F(2, 6) = d_dist_da * s_ph;
-
-        F(3, 6) = d_v_da;
-        F(6, 6) = d_a_da;
+        Eigen::MatrixXd F = getF(th, ph, d_dist_dv, d_dist_da, d_v_da, d_a_da, dist_step, dt);
 
         // 3. Update Covariance
         P = F * P * F.transpose() + Q;
     }
 };
-
-// class CTRVModel : public BaseEKFModel {
-// private:
-//     bool is_left_;
-//     double threshold_;
-//     double var_a_;
-//     double var_yaw_;
-
-// public:
-//     CTRVModel(int state_dim, int meas_dim, bool is_left, double threshold,
-//                 double sigma_a, double sigma_yaw_accel) 
-//         : BaseEKFModel(state_dim, meas_dim),
-//         is_left_(is_left),
-//         threshold_(threshold),
-//         var_a_ (sigma_a * sigma_a),
-//         var_yaw_ (sigma_yaw_accel * sigma_yaw_accel) {}
-
-//     void predict(double dt) override {
-//         double px = x(0), py = x(1), pz = x(2);
-//         double v  = x(3), th = x(4), ph = x(5);
-//         double a  = x(6), th_d = x(7), ph_d = x(8);
-
-//         // if (v < 0.0) {
-//         //     v = -v;                 // Make velocity positive
-//         //     th += M_PI;             // Flip heading 180 degrees
-//         //     th = normalize_angle(th);
-//         // }
-
-//         setQ(dt, th);
-
-//         // 2. Apply Turn Rate Constraints
-//         // If we expect to turn left, ensure yaw rate is sufficiently positive
-//         if (is_left_) {
-//             th_d = threshold_;
-//         } 
-//         // If we expect to turn right, ensure yaw rate is sufficiently negative
-//         else {
-//             th_d = -threshold_;
-//         }
-
-//         // 3. Predict Kinematics
-//         double dist_step = v * dt + 0.5 * a * dt * dt;
-        
-//         // Update Position
-//         x(0) = px + dist_step * cos(ph) * cos(th);
-//         x(1) = py + dist_step * cos(ph) * sin(th);
-//         x(2) = pz + dist_step * sin(ph);
-        
-//         // Update Kinematics & Angles
-//         x(3) = v + a * dt;
-//         x(4) = normalize_angle(th + th_d * dt);
-//         x(5) = normalize_angle(ph + ph_d * dt);
-        
-//         // Note: a, th_d, and ph_d remain constant 
-//         x(6) = a;
-//         x(7) = th_d;
-//         x(8) = ph_d;
-
-//         // 4. Compute Jacobian Matrix (F)
-//         Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        
-//         double s_th = sin(th), c_th = cos(th);
-//         double s_ph = sin(ph), c_ph = cos(ph);
-        
-//         double d_dist_dv = dt;
-//         double d_dist_da = 0.5 * dt * dt;
-
-//         // Derivatives for Position X
-//         F(0, 3) = d_dist_dv * c_ph * c_th;      
-//         F(0, 6) = d_dist_da * c_ph * c_th;      
-//         F(0, 4) = -dist_step * c_ph * s_th;     
-//         F(0, 5) = -dist_step * s_ph * c_th;
-
-//         // Derivatives for Position Y
-//         F(1, 3) = d_dist_dv * c_ph * s_th;
-//         F(1, 6) = d_dist_da * c_ph * s_th;
-//         F(1, 4) = dist_step * c_ph * c_th;
-//         F(1, 5) = -dist_step * s_ph * s_th;
-
-//         // Derivatives for Position Z
-//         F(2, 3) = d_dist_dv * s_ph;
-//         F(2, 6) = d_dist_da * s_ph;
-//         F(2, 5) = dist_step * c_ph;
-
-//         // Derivatives for Velocity & Angles
-//         F(3, 6) = dt;    // dv/da
-//         F(4, 7) = dt;    // dth/dth_d
-//         F(5, 8) = dt;    // dph/dph_d
-
-//         // 5. Update Covariance
-//         P = F * P * F.transpose() + Q;
-//     }
-
-//     void setQ(double dt, double theta) {
-//         Q.setZero();
-//         double dt2 = dt * dt;
-//         double dt3 = dt2 * dt;
-//         double dt4 = dt3 * dt;
-
-//         // Trig values for current heading
-//         double c_th = cos(theta);
-//         double s_th = sin(theta);
-
-//         // =======================================================
-//         // 1. Longitudinal Acceleration Noise
-//         // (Pushes velocity, which in turn pushes X and Y based on heading)
-//         // =======================================================
-        
-//         // Position-Position Covariance
-//         Q(0, 0) = 0.25 * dt4 * var_a_ * c_th * c_th; // x, x
-//         Q(1, 1) = 0.25 * dt4 * var_a_ * s_th * s_th; // y, y
-//         Q(0, 1) = 0.25 * dt4 * var_a_ * c_th * s_th; // x, y (Cross-correlation)
-//         Q(1, 0) = Q(0, 1);
-
-//         // Position-Velocity Covariance
-//         Q(0, 3) = 0.5 * dt3 * var_a_ * c_th;         // x, v
-//         Q(3, 0) = Q(0, 3);
-//         Q(1, 3) = 0.5 * dt3 * var_a_ * s_th;         // y, v
-//         Q(3, 1) = Q(1, 3);
-
-//         // Velocity-Velocity Covariance
-//         Q(3, 3) = dt2 * var_a_;                      // v, v
-
-//         // =======================================================
-//         // 2. Yaw Acceleration Noise
-//         // (Pushes the turn rate, which in turn pushes the heading)
-//         // =======================================================
-        
-//         Q(4, 4) = 0.25 * dt4 * var_yaw_;             // theta, theta
-//         Q(4, 7) = 0.5 * dt3 * var_yaw_;              // theta, theta_dot
-//         Q(7, 4) = Q(4, 7);
-//         Q(7, 7) = dt2 * var_yaw_;                    // theta_dot, theta_dot
-
-//         // =======================================================
-//         // 3. Baseline Noise for Uncorrelated States
-//         // (Prevents matrix singularities in Z, Accel, and Phi)
-//         // =======================================================
-//         Q(2, 2) = 0.01;  // z
-//         Q(5, 5) = 0.01;  // phi
-//         Q(6, 6) = 0.01;  // a 
-//         Q(8, 8) = 0.01;  // phi_dot
-//     }
-// };

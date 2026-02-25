@@ -478,6 +478,82 @@ void IMMObstacleTrackerPredictionNode::combine(IMMTrack& track)
     }
 }
             
+std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode::generateMergedPrediction(
+    const IMMTrack& track)
+{
+     std::vector<std::pair<double, Eigen::Vector3d>> trajectory;    
+
+    // --- 1. Set Horizon based on Mode ---
+    int num_steps = std::ceil(prediction_horizon_ / prediction_dt_);
+
+    // Store previous and current measurement for each mode
+    std::array<double, NUM_MODES> x, y, z, v, th, ph, a, th_d, ph_d;
+
+    Eigen::VectorXd current_probs = track.mode_probs;
+
+    // initialize
+    for (int m = 0; m < NUM_MODES; m++) {
+        x[m]    = track.models[m]->x(0);
+        y[m]    = track.models[m]->x(1);
+        z[m]    = track.models[m]->x(2);
+        th[m]   = track.models[m]->x(4);
+        ph[m]   = track.models[m]->x(5);
+        th_d[m] = track.models[m]->x(7);
+        ph_d[m] = track.models[m]->x(8);
+
+        double v_ = track.models[m]->x(3);
+        double a_ = track.models[m]->x(6);
+        
+        if  (v_ > 5.0) v_ = 5.0;
+        if (v_ < -5.0) v_ = -5.0;
+        
+        if  (a_ > 8.0) a_ = 8.0;
+        if (a_ < -8.0) a_ = -8.0;
+
+        v[m]    = v_;
+        a[m]    = a_;
+    }
+
+    // --- 2. Step-by-Step Integration ---
+    for (int step = 0; step < num_steps; ++step) {
+        double t = step * prediction_dt_;
+        double x_mixed, y_mixed, z_mixed;
+        x_mixed = 0.0;
+        y_mixed = 0.0;
+        z_mixed = 0.0;
+
+        for (int m = 0; m < NUM_MODES; m++) {
+            // mix
+            x_mixed += current_probs(m) * x[m];
+            y_mixed += current_probs(m) * y[m];
+            z_mixed += current_probs(m) * z[m];
+            
+            // integrate
+            double dist = v[m] * prediction_dt_ + 0.5 * a[m] * std::pow(prediction_dt_, 2);
+            
+            x[m] += dist * cos(ph[m]) * cos(th[m]);
+            y[m] += dist * cos(ph[m]) * sin(th[m]);
+            z[m] += dist * sin(ph[m]);
+            
+            th[m] += th_d[m] * prediction_dt_;
+            ph[m] += ph_d[m] * prediction_dt_;
+            
+            v[m] += a[m] * prediction_dt_;
+
+            if  (v[m] > 5.0) v[m] = 5.0;
+            if (v[m] < -5.0) v[m] = -5.0;
+            
+            if  (a[m] > 8.0) a[m] = 8.0;
+            if (a[m] < -8.0) a[m] = -8.0;
+        }
+        trajectory.push_back({t, Eigen::Vector3d(x_mixed, y_mixed, z_mixed)});
+
+        current_probs = trans_prob_mat_.transpose() * current_probs;
+    }
+
+    return trajectory;
+}
+
 std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode::generatePrediction(
     const IMMTrack& track, const int best_mode)
 {
@@ -522,6 +598,12 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
         ph += ph_d * prediction_dt_;
 
         v += a * prediction_dt_;
+
+        if  (v > 5.0) v = 5.0;
+        if (v < -5.0) v = -5.0;
+
+        if  (a > 8.0) a = 8.0;
+        if (a < -8.0) a = -8.0;
     }
 
     return trajectory;
@@ -587,58 +669,66 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         if (fabs(track.x(3)) <= velocity_threshold_) continue;
 
         std::vector<std::pair<double, Eigen::Vector3d>> predicted_trajectory = generatePrediction(track, best_mode);
+        std::vector<std::pair<double, Eigen::Vector3d>> predicted_merged_trajectory = generateMergedPrediction(track);
 
-        for (int k = 0; k < predicted_trajectory.size() - 1; ++k)
-        {
-            // Calculate time for this step
-            double t = predicted_trajectory[k].first;
-            Eigen::Vector3d p_curr = predicted_trajectory[k].second;
-
-            t_values.push_back(t);
-            x_values.push_back(p_curr(0));
-            y_values.push_back(p_curr(1));
-            z_values.push_back(p_curr(2));
-
-            if (k == predicted_trajectory.size() - 1) continue;
-
-            Eigen::Vector3d p_next = predicted_trajectory[k+1].second;
-            
-            // Create a marker to visualize the predicted position at this time step
-            visualization_msgs::msg::Marker marker;
-            marker.header.frame_id = frame_id_;
-            marker.id = id++;
-            marker.type = visualization_msgs::msg::Marker::ARROW;
-            marker.action = visualization_msgs::msg::Marker::ADD;
-
-            // Set arrow start (current position) and end (future position)
-            geometry_msgs::msg::Point start, end;
-            start.x = p_curr(0);
-            start.y = p_curr(1);
-            start.z = p_curr(2);
-            end.x = p_next(0);
-            end.y = p_next(1);
-            end.z = p_next(2);
-
-            // Set arrow start and end points
-            marker.points.push_back(start);
-            marker.points.push_back(end);
-
-            // Set scale (arrow width and length)
-            marker.scale.x = 0.1;
-            marker.scale.y = 0.2;
-
-            // Set color (you can gradually fade it based on time step)
-            marker.color.r = track.color.r;
-            marker.color.g = track.color.g;
-            marker.color.b = track.color.b;
-            marker.color.a = track.color.a;
-
-            // lifetime
-            // marker.lifetime = rclcpp::Duration::from_seconds(0.1);
-
-            // Add this marker to the marker array
-            markers.markers.push_back(marker);
+        // for now, keep best mode data
+        for (const auto& pt : predicted_trajectory) {
+            t_values.push_back(pt.first);
+            x_values.push_back(pt.second(0));
+            y_values.push_back(pt.second(1));
+            z_values.push_back(pt.second(2));
         }
+
+        // --- Helper Lambda to generate markers for ANY trajectory ---
+        auto add_trajectory_markers = [&](const std::vector<std::pair<double, Eigen::Vector3d>>& traj, 
+                                          float r, float g, float b, float a, float scale_x,
+                                          const std::string& ns) 
+        {
+            for (size_t k = 0; k < traj.size() - 1; ++k)
+            {
+                Eigen::Vector3d p_curr = traj[k].second;
+                Eigen::Vector3d p_next = traj[k+1].second;
+                
+                visualization_msgs::msg::Marker marker;
+                marker.header.frame_id = frame_id_;
+                marker.ns = ns;
+                marker.id = id++; // Crucial: Unique ID for every single arrow across BOTH trajectories
+                marker.type = visualization_msgs::msg::Marker::ARROW;
+                marker.action = visualization_msgs::msg::Marker::ADD;
+
+                // Set arrow start (current position) and end (future position)
+                geometry_msgs::msg::Point start, end;
+                start.x = p_curr(0);
+                start.y = p_curr(1);
+                start.z = p_curr(2);
+                end.x = p_next(0);
+                end.y = p_next(1);
+                end.z = p_next(2);
+
+                marker.points.push_back(start);
+                marker.points.push_back(end);
+
+                // Set scale (shaft width, head width, head length)
+                marker.scale.x = scale_x; // Varying thickness helps differentiate them
+                marker.scale.y = scale_x * 2.0;
+                marker.scale.z = scale_x * 2.0;
+
+                // Set custom color passed into the lambda
+                marker.color.r = r;
+                marker.color.g = g;
+                marker.color.b = b;
+                marker.color.a = a;
+
+                // Add this marker to the global marker array
+                markers.markers.push_back(marker);
+            }
+        };
+
+        add_trajectory_markers(predicted_trajectory, 
+                               1.0, 0.0, 0.0, 1.0, 0.1, "best_mode_traj");
+
+        add_trajectory_markers(predicted_merged_trajectory, 
+                               1.0, 1.0, 0.0, 1.0, 0.1, "merged_mode_traj");
 
         // Check if x_values, y_values, z_values changed much (especially in the beginning, the predicted trajectories can be very short and hard to fit)
         // If they are not changing much, we can skip the polynomial fitting
@@ -646,7 +736,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         double y_diff = abs(y_values.front() - y_values.back());
         double z_diff = abs(z_values.front() - z_values.back());
 
-        double cutoff_length_threshold = 0.00; // TODO: make this a parameter?
+        double cutoff_length_threshold = 0.1; // TODO: make this a parameter?
 
         // If the predicted trajectory is too short, skip the polynomial fitting
         if (x_diff < cutoff_length_threshold && y_diff < cutoff_length_threshold && z_diff < cutoff_length_threshold)

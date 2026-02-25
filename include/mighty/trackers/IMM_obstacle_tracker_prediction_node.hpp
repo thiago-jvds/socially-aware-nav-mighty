@@ -149,6 +149,7 @@ private:
     Eigen::VectorXd polyfit(const std::vector<double>& t, const std::vector<double>& y, int degree);
     double calculateVariance(const std::vector<double>& t, const std::vector<double>& y, const Eigen::VectorXd& beta, int degree);
     std::vector<std::pair<double, Eigen::Vector3d>> generatePrediction(const IMMTrack& track, int best_mode);
+    std::vector<std::pair<double, Eigen::Vector3d>> generateMergedPrediction(const IMMTrack& track); 
     void publishPredictions(const std::vector<Measurement> &measurements);    
 
     // ROS Interfaces
