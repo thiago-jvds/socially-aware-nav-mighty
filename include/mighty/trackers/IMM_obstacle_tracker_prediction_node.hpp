@@ -13,6 +13,7 @@
 #include <vector>
 #include <string>
 #include "base_EKF_tracker.hpp"
+#include <math.h>
 
 const int NUM_MODES = 3;
 
@@ -34,14 +35,18 @@ struct IMMTrack {
     
     // IMM Math Vectors
     Eigen::VectorXd mode_probs;
+    Eigen::VectorXd prev_mode_probs;
     Eigen::VectorXd likelihoods;
     Eigen::VectorXd c_bar;
+
+    // TPM
+    Eigen::MatrixXd trans_prob_mat_;
 
     bool is_first_meas;
 
     IMMTrack() {}
     IMMTrack(int state_dim, int meas_dim, double time, const Eigen::Vector3d& centroid, const Eigen::Vector3d& bbox_in,
-        int id_in, double sigma_a_CA, double sigma_yaw_CA, double fixed_yaw_rate) {
+        int id_in, double sigma_a_CA, double sigma_yaw_CA, double prob_transition_stay) {
         id = id_in++;
         time_last_updated = time;
         bbox = bbox_in;
@@ -68,9 +73,9 @@ struct IMMTrack {
         int num_modes = NUM_MODES; 
         
         // Push your specific derived models
-        models.push_back(std::make_shared<CVModel>(state_dim, meas_dim, 0.01, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
-        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
-        models.push_back(std::make_shared<SingerModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, fixed_yaw_rate, MODE_FWD));
+        models.push_back(std::make_shared<CVModel>(state_dim, meas_dim, 0.01, sigma_yaw_CA, MODE_FWD));
+        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, MODE_FWD));
+        models.push_back(std::make_shared<CTModel>(state_dim, meas_dim, 0.5, sigma_yaw_CA, MODE_FWD));
 
         // Sync initial state to all models
         for (auto& model : models) {
@@ -82,11 +87,16 @@ struct IMMTrack {
         // Setup Probabilities
         mode_probs = Eigen::VectorXd::Zero(num_modes);
         mode_probs.fill(1.0 / num_modes); 
+
+        prev_mode_probs = Eigen::VectorXd::Zero(num_modes);
+        prev_mode_probs.fill(1.0 / num_modes); 
         
         likelihoods = Eigen::VectorXd::Zero(num_modes);
         c_bar = Eigen::VectorXd::Zero(num_modes);
 
         setColor();
+
+        initializeTPM(num_modes, prob_transition_stay);
     }
 
     void setColor() {
@@ -94,6 +104,70 @@ struct IMMTrack {
         this->color.g = static_cast<float>(rand()) / RAND_MAX;
         this->color.b = static_cast<float>(rand()) / RAND_MAX;
         this->color.a = 1.0;
+    }
+
+    void initializeTPM(int num_modes, double prob_transition_stay) {
+        this->trans_prob_mat_ = Eigen::MatrixXd::Zero(num_modes, num_modes);
+
+        double p_stay = prob_transition_stay; 
+        double p_switch = (1.0 - p_stay) / (num_modes - 1); 
+
+        for (int i = 0; i < num_modes; ++i) {
+            for (int j = 0; j < num_modes; ++j) {
+                this->trans_prob_mat_(i, j) = (i == j) ? p_stay : p_switch;
+            }
+        }
+    }
+
+    /*
+     * Gao, Jianshu, et al. "Moving-Target Tracking in Airport Airside Operations Using AIMM-STUKF." Sensors 26.1 (2025): 166
+     */
+    void adaptTPM() {
+        if (this->is_first_meas || this->mode_probs.isApprox(this->prev_mode_probs, 1e-6)) {
+            this->prev_mode_probs = this->mode_probs;
+            return;
+        }
+        
+        int num_modes = static_cast<int>(models.size());
+        double n = 0.6;
+        double th = 0.9;
+
+        for (int m1 = 0; m1 < num_modes; m1++) {
+            double norm = 0.0;
+            double delta_mu_m1 = this->mode_probs[m1] - this->prev_mode_probs[m1];
+
+            for (int m2 = 0; m2 < num_modes; m2++) {
+                double delta_mu_m2 = this->mode_probs[m2] - this->prev_mode_probs[m2];
+                
+                double correction_factor = (m1 == m2) ? std::pow(delta_mu_m2, n) : std::pow(delta_mu_m2 / delta_mu_m1, n);
+                
+                this->trans_prob_mat_(m1, m2) = correction_factor * this->trans_prob_mat_(m1, m2);
+                norm += this->trans_prob_mat_(m1, m2);
+            }
+            
+            // Normalize the row
+            for (int m2 = 0; m2 < num_modes; m2++) {
+                this->trans_prob_mat_(m1, m2) /= norm;
+            }
+            
+            // Apply lower-bound threshold to the diagonal element
+            if (this->trans_prob_mat_(m1, m1) < th) {
+                double old_diag = this->trans_prob_mat_(m1, m1);
+                this->trans_prob_mat_(m1, m1) = th;
+                
+                // Scale the off-diagonal elements so the row still sums to 1.0
+                double off_diag_sum = 1.0 - old_diag;
+                if (off_diag_sum > 0.0) {
+                    double scale = (1.0 - th) / off_diag_sum;
+                    for (int m2 = 0; m2 < num_modes; m2++) {
+                        if (m1 != m2) {
+                            this->trans_prob_mat_(m1, m2) *= scale;
+                        }
+                    }
+                }
+            }
+        }
+        this->prev_mode_probs = this->mode_probs;
     }
 };
 
@@ -116,9 +190,6 @@ private:
     // Callbacks
     void detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg);
 
-    // --- IMM Core Functions ---
-    void initialize_imm_matrices(); // Set up Transition and Q matrices
-    
     // 1. Interaction (Mixing Step)
     void interaction(IMMTrack& track, 
                          std::vector<Eigen::VectorXd>& x_mixed, 

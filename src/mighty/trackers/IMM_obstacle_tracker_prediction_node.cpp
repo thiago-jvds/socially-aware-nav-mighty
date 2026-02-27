@@ -87,26 +87,7 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     pred_pos_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("predicted_positions", 10);
     pred_vel_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("predicted_velocities", 10);
 
-    initialize_imm_matrices();
-
     RCLCPP_INFO(this->get_logger(), " IMM Tracker & Prediction Initialized.");
-}
-
-void IMMObstacleTrackerPredictionNode::initialize_imm_matrices()
-{
-    // --- A. Transition Probability Matrix (TPM) ---
-    // Rows sum to 1. Entry (i, j) is Prob(Mode j | Mode i)
-    
-    trans_prob_mat_ = Eigen::MatrixXd::Zero(NUM_MODES, NUM_MODES);
-
-    double p_stay = prob_transition_stay_; 
-    double p_switch = (1.0 - p_stay) / (NUM_MODES - 1); 
-
-    for (int i = 0; i < NUM_MODES; ++i) {
-        for (int j = 0; j < NUM_MODES; ++j) {
-            trans_prob_mat_(i, j) = (i == j) ? p_stay : p_switch;
-        }
-    }
 }
 
 void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg)
@@ -188,7 +169,7 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
                 centroid, raw_bbox, track_id_++,
                 sigma_a_CA_,
                 sigma_yaw_CA_,
-                fixed_yaw_rate_);
+                prob_transition_stay_);
 
             tracks_.push_back(new_track);            
             
@@ -352,7 +333,7 @@ void IMMObstacleTrackerPredictionNode::interaction(
     
     for (int j = 0; j < NUM_MODES; ++j) {
         for (int i = 0; i < NUM_MODES; ++i) {
-            track.c_bar(j) += trans_prob_mat_(i, j) * track.mode_probs(i);
+            track.c_bar(j) += track.trans_prob_mat_(i, j) * track.mode_probs(i);
         }
     }
     
@@ -370,7 +351,7 @@ void IMMObstacleTrackerPredictionNode::interaction(
         for (int i = 0; i < NUM_MODES; ++i) {
             // Mixing Weight: Prob(Came from i | Currently in j)
             // w_ij = (T_ij * mu_i) / c_bar[j]
-            double w_ij = (trans_prob_mat_(i, j) * track.mode_probs(i)) / c_j;
+            double w_ij = (track.trans_prob_mat_(i, j) * track.mode_probs(i)) / c_j;
             
             x_mixed[j] += w_ij * track.models[i]->x;
         }
@@ -378,7 +359,7 @@ void IMMObstacleTrackerPredictionNode::interaction(
         // 3. Calculate Weighted Covariance + Spread
         // P_0j = Sum_i ( w_ij * (P_i + (x_i - x_0j)(x_i - x_0j)^T) )
         for (int i = 0; i < NUM_MODES; ++i) {
-            double w_ij = (trans_prob_mat_(i, j) * track.mode_probs(i)) / c_j;
+            double w_ij = (track.trans_prob_mat_(i, j) * track.mode_probs(i)) / c_j;
             
             // Calculate difference (spread)
             Eigen::VectorXd diff = track.models[i]->x - x_mixed[j];
@@ -442,11 +423,13 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
     // Update bounding box
     track.bbox = 0.5 * track.bbox + (1 - 0.5) * bbox;
 
+    // Adapt TPM
+    // track.adaptTPM();
+
     if (tracker_debug_) {
         RCLCPP_INFO(this->get_logger(), 
-            "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, SINGER: %.2f",
-            track.id, track.mode_probs(0), track.mode_probs(1), 
-        track.mode_probs(2));
+            "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, CT: %.2f",
+            track.id, track.mode_probs(0), track.mode_probs(1), track.mode_probs(2));
     }
     
 }
@@ -548,7 +531,7 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
         }
         trajectory.push_back({t, Eigen::Vector3d(x_mixed, y_mixed, z_mixed)});
 
-        current_probs = trans_prob_mat_.transpose() * current_probs;
+        current_probs = track.trans_prob_mat_.transpose() * current_probs;
     }
 
     return trajectory;
@@ -634,7 +617,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         track.mode_probs.maxCoeff(&best_mode);
 
         if (tracker_debug_) {
-            std::string mode_names[] = {"CV", "CA", "SINGER"};
+            std::string mode_names[] = {"CV", "BRAKING"};
 
             // --- 2. Determine Color Based on Mode ---
             std_msgs::msg::ColorRGBA mode_color;
