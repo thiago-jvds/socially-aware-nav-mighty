@@ -123,10 +123,6 @@ struct IMMTrack {
      * Gao, Jianshu, et al. "Moving-Target Tracking in Airport Airside Operations Using AIMM-STUKF." Sensors 26.1 (2025): 166
      */
     void adaptTPM() {
-        if (this->is_first_meas || this->mode_probs.isApprox(this->prev_mode_probs, 1e-6)) {
-            this->prev_mode_probs = this->mode_probs;
-            return;
-        }
         
         int num_modes = static_cast<int>(models.size());
         double n = 0.6;
@@ -134,10 +130,10 @@ struct IMMTrack {
 
         for (int m1 = 0; m1 < num_modes; m1++) {
             double norm = 0.0;
-            double delta_mu_m1 = this->mode_probs[m1] - this->prev_mode_probs[m1];
+            double delta_mu_m1 = std::exp(this->mode_probs[m1] - this->prev_mode_probs[m1]);
 
             for (int m2 = 0; m2 < num_modes; m2++) {
-                double delta_mu_m2 = this->mode_probs[m2] - this->prev_mode_probs[m2];
+                double delta_mu_m2 = std::exp(this->mode_probs[m2] - this->prev_mode_probs[m2]);
                 
                 double correction_factor = (m1 == m2) ? std::pow(delta_mu_m2, n) : std::pow(delta_mu_m2 / delta_mu_m1, n);
                 
