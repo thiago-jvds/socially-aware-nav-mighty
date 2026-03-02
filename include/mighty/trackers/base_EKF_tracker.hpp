@@ -66,7 +66,14 @@ public:
         Eigen::MatrixXd S = H * P * H.transpose() + R;
         Eigen::MatrixXd K = P * H.transpose() * S.inverse();
 
-        x = x + K * y_res;
+        Eigen::VectorXd delta_x = K * y_res;
+
+        if (std::fabs(x(3)) < 0.2) {
+            delta_x(4) = 0.0;
+
+            delta_x(7) = 0.0;
+        }
+        x = x + delta_x;
 
         // force positive velocity
         if (x(3) < -0.1) {
@@ -364,6 +371,12 @@ public:
         }
 
         setQ(dt);
+
+        if (th_d < 0.0) {
+            th_d = std::min(-0.1, th_d);
+        } else {
+            th_d = std::max(0.1, th_d);
+        }
 
         // 1. Predict Kinematics
         double dist_step = v * dt;

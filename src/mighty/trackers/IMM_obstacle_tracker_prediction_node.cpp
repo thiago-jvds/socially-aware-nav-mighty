@@ -424,7 +424,7 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
     track.bbox = 0.5 * track.bbox + (1 - 0.5) * bbox;
 
     // Adapt TPM
-    // track.adaptTPM();
+    track.adaptTPM();
 
     if (tracker_debug_) {
         RCLCPP_INFO(this->get_logger(), 
