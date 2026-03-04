@@ -240,8 +240,6 @@ private:
 
     std::string frame_id_ = "map";
     
-    bool tracker_debug_ = true;
-    
     // Parameters
     double cluster_tolerance_;
     double adaptive_kf_dt_;
@@ -257,6 +255,7 @@ private:
     double dynus_map_res_;
     int visual_level_;
     std::string tracking_frame_;
+    bool tracker_debug_;
     
     // IMM specific params
     double prob_transition_stay_; // Prob of staying in current mode

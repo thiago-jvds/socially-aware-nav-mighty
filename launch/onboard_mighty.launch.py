@@ -45,6 +45,8 @@ def generate_launch_description():
         description='Override map frame ID (empty = auto from use_hardware)')
     use_frame_alignment_arg = DeclareLaunchArgument('use_frame_alignment', default_value='',
         description='Override use_frame_alignment (empty = use config default)')
+    use_IMM_and_vicon_arg = DeclareLaunchArgument('use_IMM_and_vicon', default_value='false',
+        description='Use IMM tracker and Vicon for Dynamic Obj detection')
 
     # Need to be the same as simulartor.launch.py
     map_size_x_arg = DeclareLaunchArgument('map_size_x', default_value='20.0')
@@ -81,6 +83,7 @@ def generate_launch_description():
         num_agents = int(LaunchConfiguration('num_agents').perform(context))
         map_frame_id_override = LaunchConfiguration('map_frame_id').perform(context)
         use_frame_alignment_str = LaunchConfiguration('use_frame_alignment').perform(context)
+        use_IMM_and_vicon = convert_str_to_bool(LaunchConfiguration('use_IMM_and_vicon').perform(context))
 
         # The path to the urdf file - select based on robot type
         urdf_filename = 'p3at.urdf.xacro' if use_ground_robot else 'quadrotor.urdf.xacro'
@@ -105,8 +108,10 @@ def generate_launch_description():
 
         # Override with HW config if using hardware
         if use_hardware:
-            if robot_type in [RED_ROVER, STAR_ROBOT]:
+            if robot_type in [RED_ROVER]:
                 hw_config_filename = 'hw_mighty_rover.yaml'
+            elif robot_type in [STAR_ROBOT]:
+                hw_config_filename = 'hw_mighty_star_robot.yaml'
             else:  # quadrotor
                 hw_config_filename = 'hw_mighty.yaml'
             hw_parameters_path = os.path.join(get_package_share_directory('mighty'), 'config', hw_config_filename)
@@ -141,8 +146,8 @@ def generate_launch_description():
                     parameters=[parameters],
                     remappings=[('lidar_cloud_in', lidar_point_cloud_topic),
                                 ('depth_camera_cloud_in', f'{depth_camera_name}/depth/color/points')],
-                    arguments=['--ros-args', '--log-level', 'error'],
-                    prefix='xterm -e gdb -q -ex run --args', # gdb debugging
+                    arguments=['--ros-args', '--log-level', 'info'],
+                    # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
         )
 
         # Robot state publisher node
@@ -289,16 +294,38 @@ def generate_launch_description():
             remappings=[('odom', 'dlio/odom_node/odom'), ('state', 'state')],
             output='screen', emulate_tty=True)
 
-        # HW: Static TF (map->odom identity, for robots using external localization)
+        # HW: Static TF (map->odom)
         static_tf_node = Node(
             package='tf2_ros', executable='static_transform_publisher',
             name='static_tf_map_to_odom', output='screen',
-            arguments=['0','0','0','0','0','0','1', f'{namespace}/map', f'{namespace}/odom'])
+            arguments=['0','0','0','0','0','0','1', 'map', f'{namespace}/init_pose'])
         
         # map2map_tf_node = Node(
         #     package='tf2_ros', executable='static_transform_publisher',
         #     name='map2map_tf_node', output='screen',
         #     arguments=['0','0','0','0','0','0','1', f'{namespace}/map', 'map'])
+
+        imm_node = Node(
+            package='mighty',
+            executable='IMM_obstacle_tracker_prediction_node',
+            name='IMM_obstacle_tracker_prediction',
+            namespace=namespace,
+            parameters=[parameters],
+            output='screen',
+            emulate_tty=True,
+        )
+
+        bag_perception_node = Node(
+            package='mighty',
+            executable='bag_perception_node',
+            name='bag_perception_node',
+            namespace=namespace,
+            parameters=[{
+                'target_topics': ['/HELMET3/world', '/Lucas6/world']
+            }],
+            output='screen',
+            emulate_tty=True,
+        )
 
         # Return launch description
         nodes_to_start = [mighty_node]
@@ -321,6 +348,7 @@ def generate_launch_description():
             nodes_to_start.append(pcl_render_node) if parameters['sim_env'] == 'fake_sim' else None
 
         nodes_to_start.append(obstacle_tracker_node) if use_obstacle_tracker else None
+        nodes_to_start.extend([imm_node, bag_perception_node]) if use_IMM_and_vicon else None
         return nodes_to_start
 
     # Create launch description
@@ -350,5 +378,6 @@ def generate_launch_description():
         num_agents_arg,
         map_frame_id_arg,
         use_frame_alignment_arg,
+        use_IMM_and_vicon_arg,
         OpaqueFunction(function=launch_setup)
     ])

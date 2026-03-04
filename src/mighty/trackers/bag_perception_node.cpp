@@ -16,7 +16,12 @@ public:
         frame_id_ = this->get_parameter("frame_id").as_string();
 
         // Specific topics to subscribe to
-        std::vector<std::string> target_topics = {"/Lucas6/world", "/HELMET3/world"};
+        this->declare_parameter<std::vector<std::string>>(
+            "target_topics", 
+            {"/Lucas6/world", "/HELMET3/world"}
+        );
+
+        std::vector<std::string> target_topics = this->get_parameter("target_topics").as_string_array();
 
         // Publisher: Sends detections to tracker
         det_pub_ = this->create_publisher<vision_msgs::msg::Detection3DArray>(

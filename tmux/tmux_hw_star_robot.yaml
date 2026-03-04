@@ -1,0 +1,55 @@
+session_name: docker_hardware_ground_robot
+windows:
+  - window_name: main
+    layout: tiled
+    shell_command_before:
+      - source /opt/ros/humble/setup.bash
+      - source /home/swarm/.bashrc
+    panes:
+      # ======= Onboard mighty =======
+      - shell_command:
+        - source /home/swarm/code/decomp_ws/install/setup.bash
+        - source /home/swarm/code/mighty_ws/install/setup.bash
+        - ros2 launch mighty onboard_mighty.launch.py x:=0.0 y:=0.0 z:=0.0 yaw:=0.0 namespace:=ST01 use_hardware:=true use_obstacle_tracker:=false use_onboard_localization:=true robot_type:=star_robot depth_camera_name:=d455 use_IMM_and_vicon:=false map_frame_id:=map odom_frame_id:=odom base_frame_id:=base_link lidar_point_cloud_topic:="/ST01/livox/lidar" depth_camera_point_cloud_topic:="/ST01/d455/depth/color/points" use_rviz:=false
+
+      # ======= D455 =======
+      # - shell_command:
+      #   - source /home/swarm/code/realsense-ros_ws/install/setup.bash
+      #   - ros2 launch realsense2_camera rs_d455_launch.py
+
+      # Static TF
+      # - shell_command:
+      #   - source /home/swarm/code/mighty_ws/install/setup.bash
+      #   - ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 ST01/base_link ST01/d455_link
+
+      # ======= Livox =======
+      - shell_command:
+        - source /home/swarm/code/livox_ws/install/setup.bash
+        - ros2 launch livox_ros_driver2 run_MID360_launch.py namespace:=ST01
+
+      # Static TF, contains 20 deg down
+      - shell_command:
+        - source /home/swarm/code/mighty_ws/install/setup.bash
+        - ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0 --yaw 0 --pitch 0.3490659 --roll 0 --frame-id ST01/base_link --child-frame-id ST01/lidar
+      
+      # ======= DLIO =======
+      - shell_command:
+        - source /home/swarm/code/dlio_ws/install/setup.bash
+        - ros2 launch direct_lidar_inertial_odometry dlio.launch.py namespace:=ST01 pointcloud_topic:="/ST01/livox/lidar" imu_topic:="/ST01/livox/imu"
+
+      # ======= Republish rviz 2D goal to term goal =======
+      # - shell_command:
+      #   - source /home/swarm/code/mighty_ws/install/setup.bash
+      #   - ros2 run mighty repub_rviz_2Dgoal.py
+
+      # ======= Global Mapper =======
+      - shell_command:
+        - source /home/swarm/code/mighty_ws/install/setup.bash
+        - ros2 launch global_mapper_ros global_mapper_node.launch.py quad:="ST01" depth_pointcloud_topic:="livox/lidar" pose_topic:="dlio/odom_node/pose" odom_topic:="dlio/odom_node/odom" param_file:="global_mapper_ground_robot.yaml"
+
+      # ======= RVIZ =======
+      - shell_command:
+        - source /home/swarm/code/decomp_ws/install/setup.bash
+        - source /home/swarm/code/mighty_ws/install/setup.bash
+        - rviz2 rviz2 -d /home/swarm/code/mighty_ws/src/mighty/rviz/mighty_hw_ground_robot.rviz
+

@@ -8,6 +8,8 @@
 #  * See LICENSE file for the license information
 #  * -------------------------------------------------------------------------- */
 
+# example: ros2 run mighty goal_sender.py --ros-args -p list_agents:="['ST01']" -p list_goals:="['[5.0, 5.0]']" -p default_goal_z:=0.0
+
 import os
 import yaml
 from ament_index_python.packages import get_package_share_directory

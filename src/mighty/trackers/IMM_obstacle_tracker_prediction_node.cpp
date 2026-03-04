@@ -53,6 +53,7 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     this->declare_parameter("dynus_map_res", 0.5);
     this->declare_parameter("velocity_threshold", 0.0);
     this->declare_parameter("acceleration_threshold", 0.1);
+    this->declare_parameter("tracker_debug", false);
 
     // IMM Tuning Parameters
     this->declare_parameter("prob_transition_stay", 0.85);   // High probability to stay in current mode
@@ -75,6 +76,7 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     acceleration_threshold_ = this->get_parameter("acceleration_threshold").as_double();
     prob_transition_stay_ = this->get_parameter("prob_transition_stay").as_double();
     prob_transition_switch_ = this->get_parameter("prob_transition_switch").as_double();
+    tracker_debug_ = this->get_parameter("tracker_debug").as_bool();
 
     // 2. Pub/Sub
     sub_detections_ = this->create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -649,13 +651,15 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
             markers.markers.push_back(text_marker);
         }
 
-        if (fabs(track.x(3)) <= velocity_threshold_) continue;
+        // if (fabs(track.x(3)) <= velocity_threshold_) continue;
+
+        // if (fabs(track.x(6)) <= acceleration_threshold_) continue;
 
         std::vector<std::pair<double, Eigen::Vector3d>> predicted_trajectory = generatePrediction(track, best_mode);
         std::vector<std::pair<double, Eigen::Vector3d>> predicted_merged_trajectory = generateMergedPrediction(track);
 
         // for now, keep best mode data
-        for (const auto& pt : predicted_trajectory) {
+        for (const auto& pt : predicted_merged_trajectory) {
             t_values.push_back(pt.first);
             x_values.push_back(pt.second(0));
             y_values.push_back(pt.second(1));
