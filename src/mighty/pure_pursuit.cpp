@@ -263,6 +263,9 @@ void PurePursuit::controlCallback()
     // Apply speed reductions
     double v_command = v_ref * speed_reduction * goal_speed_factor;
 
+    RCLCPP_INFO(this->get_logger(), "v_ref: %.2f, speed_reduction: %.2f, goal_speed_factor: %.2f, v_command: %.2f, alpha_deg: %.1f",
+                v_ref, speed_reduction, goal_speed_factor, v_command, alpha * 180.0 / M_PI);
+
     // Ensure minimum velocity when not turning in place (avoid stalling)
     if (v_command < 0.05 && abs_alpha < turn_in_place_threshold_)
     {

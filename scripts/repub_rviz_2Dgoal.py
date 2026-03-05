@@ -25,13 +25,13 @@ class RepubGoalNode(Node):
         self.get_logger().info(f"Namespace: {self.namespace}")
         vehtype = os.getenv("VEHTYPE", default = None)
         vehnum = os.getenv("VEHNUM", default = None)
-        self.rover_name = vehtype + vehnum
+        self.vehicle_name = vehtype + vehnum
 
         # Publishers and Subscribers
-        self.rviz_sub = self.create_subscription(PoseStamped, f'{self.rover_name}/term_goal_rviz', self.rviz_goal_cb, 10)
-        self.term_goal_pub = self.create_publisher(PoseStamped, f'{self.rover_name}/term_goal', 10)
+        self.rviz_sub = self.create_subscription(PoseStamped, f'{self.vehicle_name}/term_goal_rviz', self.rviz_goal_cb, 10)
+        self.term_goal_pub = self.create_publisher(PoseStamped, f'{self.vehicle_name}/term_goal', 10)
 
-        self.get_logger().info("Rviz 2D republisher node initialized.")
+        self.get_logger().info(f"Rviz 2D republisher node initialized for {self.vehicle_name}.")
 
     def rviz_goal_cb(self, msg: PoseStamped):
 

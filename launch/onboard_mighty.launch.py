@@ -321,7 +321,7 @@ def generate_launch_description():
             name='bag_perception_node',
             namespace=namespace,
             parameters=[{
-                'target_topics': ['/HELMET3/world', '/Lucas6/world']
+                'target_topics': ['/HELMET1/world']
             }],
             output='screen',
             emulate_tty=True,
