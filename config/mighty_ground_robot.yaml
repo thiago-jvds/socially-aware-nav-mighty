@@ -222,12 +222,12 @@ mighty_node:
 
         # Ground robot planning parameters
         ground_robot_L_min: 1.0       # [m] Lookahead distance for point A (planning start point)
-        ground_robot_v_max: 1.0       # [m/s] Maximum linear velocity for ground robot
+        ground_robot_v_max: 3.0       # [m/s] Maximum linear velocity for ground robot
         ground_robot_w_max: 3.0       # [rad/s] Maximum angular velocity for smooth tracking
 
         # Pure pursuit controller parameters (for vehicle_type: "ground_robot")
-        pure_pursuit_L_min: 0.8       # [m] Minimum lookahead distance (higher = smoother)
-        pure_pursuit_k_v: 0.5         # [s] Velocity-dependent lookahead factor (L = L_min + k_v * v)
+        pure_pursuit_L_min: 3.0       # [m] Minimum lookahead distance (higher = smoother)
+        pure_pursuit_k_v: 0.9         # [s] Velocity-dependent lookahead factor (L = L_min + k_v * v)
         pure_pursuit_stopping_radius: 0.1  # [m] Stop when within this distance of goal
         pure_pursuit_adaptive_lookahead_distance: 2.0  # [m] Start reducing lookahead when within this distance of goal
         pure_pursuit_turn_in_place_threshold_deg: 20.0  # [deg] Heading error threshold for turn-in-place behavior
