@@ -223,10 +223,11 @@ private:
     double calculateVariance(const std::vector<double>& t, const std::vector<double>& y, const Eigen::VectorXd& beta, int degree);
     std::vector<std::pair<double, Eigen::Vector4d>> generatePrediction(const IMMTrack& track);    
     bool checkTrajectoryCollision(
-        const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj,
+        const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, // Now includes theta in index 3
         const dynus_interfaces::msg::Trajectory& robot_traj,
-        double collision_threshold,
-        bool check_3d);
+        double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
+        double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
+        double base_lon_dist);
     void publishPredictions(const std::vector<Measurement> &measurements);    
 
     // ROS Interfaces

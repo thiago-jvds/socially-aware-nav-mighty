@@ -561,68 +561,62 @@ std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode
 // =================================================================================
 
 bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollision(
-    const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj,
+    const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, // Now includes theta in index 3
     const dynus_interfaces::msg::Trajectory& robot_traj,
-    double collision_threshold,
-    bool check_3d = false) 
+    double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
+    double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
+    double base_lon_dist)
 {
-    // Edge case: empty trajectories
-    if (ped_traj.empty() || robot_traj.goals.empty()) {
-        return false;
-    }
+    if (ped_traj.empty() || robot_traj.goals.empty()) return false;
 
-    double robot_dt = robot_traj.dt; // Should be 0.01
-    double ped_dt = prediction_dt_;;
+    double robot_dt = robot_traj.dt;
+    double ped_dt = prediction_dt_;
 
-    // Evaluate collision at every step of the robot's plan
+    // Dynamically size the lateral threshold based on IMM confidence.
+    // If CV prob is 1.0 (walking straight), lateral threshold is tight (base_lat_dist).
+    // If CV prob is 0.0 (turning/chaotic), lateral expands to match longitudinal (a circle).
+    double dynamic_lat_dist = (cv_mode_prob * base_lat_dist) + ((1.0 - cv_mode_prob) * base_lon_dist);
+
     for (size_t i = 0; i < robot_traj.goals.size(); ++i) {
         double current_t = i * robot_dt;
-
-        // Find the corresponding indices in the pedestrian trajectory
         size_t ped_idx = static_cast<size_t>(current_t / ped_dt);
 
-        // If the robot's plan extends beyond our pedestrian prediction horizon, 
-        // we stop checking (or you could assume the pedestrian stays at their last position)
-        if (ped_idx >= ped_traj.size() - 1) {
-            break; 
-        }
+        if (ped_idx >= ped_traj.size() - 1) break;
 
-        // --- Linear Interpolation of Pedestrian Position ---
+        // Interpolate position AND heading
         double t0 = ped_traj[ped_idx].first;
         double t1 = ped_traj[ped_idx + 1].first;
+        double ratio = (current_t - t0) / (t1 - t0);
         
-        Eigen::Vector3d p0 = ped_traj[ped_idx].second.head<3>(); // Extract (x, y, z) from the trajectory point
-        Eigen::Vector3d p1 = ped_traj[ped_idx + 1].second.head<3>();
-
-        // How far along are we between t0 and t1? (Values 0.0 to 1.0)
-        double interpolation_ratio = (current_t - t0) / (t1 - t0);
+        Eigen::Vector4d p0 = ped_traj[ped_idx].second;
+        Eigen::Vector4d p1 = ped_traj[ped_idx + 1].second;
+        Eigen::Vector4d ped_state = p0 + ratio * (p1 - p0); 
         
-        Eigen::Vector3d ped_pos_at_t = p0 + interpolation_ratio * (p1 - p0);
+        // Robot position
+        double rx = robot_traj.goals[i].p.x;
+        double ry = robot_traj.goals[i].p.y;
 
-        // --- Fetch Robot Position ---
-        Eigen::Vector3d robot_pos_at_t(
-            robot_traj.goals[i].p.x, 
-            robot_traj.goals[i].p.y, 
-            robot_traj.goals[i].p.z
-        );
+        // 1. Find the relative position vector
+        double dx = rx - ped_state(0);
+        double dy = ry - ped_state(1);
+        double theta = ped_state(3); // Pedestrian's mixed heading
 
-        // --- Distance Calculation ---
-        double distance;
-        if (check_3d) {
-            // Spherical collision check
-            distance = (ped_pos_at_t - robot_pos_at_t).norm();
-        } else {
-            // Cylindrical / Ground plane collision check (ignoring Z)
-            distance = (ped_pos_at_t.head<2>() - robot_pos_at_t.head<2>()).norm();
-        }
+        // 2. Rotate the relative position into the pedestrian's local frame
+        // This splits the distance into Along-Track (longitudinal) and Cross-Track (lateral)
+        double dx_local =  dx * std::cos(theta) + dy * std::sin(theta);
+        double dy_local = -dx * std::sin(theta) + dy * std::cos(theta);
 
-        // --- Collision Check ---
-        if (distance <= collision_threshold) {
+        // 3. Elliptical Collision Check
+        // Equation of an ellipse: (x/a)^2 + (y/b)^2 <= 1
+        double lon_check = std::pow(dx_local / base_lon_dist, 2);
+        double lat_check = std::pow(dy_local / dynamic_lat_dist, 2);
+
+        if ((lon_check + lat_check) <= 1.0) {
             return true; // Imminent collision detected!
         }
     }
 
-    return false; // Path is clear
+    return false;
 }
 
 void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Measurement> &measurements)
@@ -653,17 +647,26 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         std::vector<std::pair<double, Eigen::Vector4d>> predicted_trajectory = generatePrediction(track);
 
         if (use_yield_mode_ && trajectory_initialized_) {
-            double collision_threshold = 1.0; // meters, can be tuned or made a parameter
+            double base_lon_dist = 1.0; // [m]
+            double base_lat_dist = 0.4; // [m]
 
-            bool collision = checkTrajectoryCollision(predicted_trajectory, trajectory_, collision_threshold, false);
+            bool collision = checkTrajectoryCollision(
+                predicted_trajectory,
+                trajectory_,
+                track.mode_probs(0), // CV mode probability as a proxy for confidence in straight walking
+                base_lat_dist,      // base lateral distance (e.g., shoulder width)
+                base_lon_dist);    // base longitudinal distance (e.g., average step length)
+
+            double d_ev_to_ped = std::sqrt(
+                    std::pow(track.x(0) - trajectory_.goals.front().p.x, 2) + 
+                    std::pow(track.x(1) - trajectory_.goals.front().p.y, 2)
+                );
+
             if (collision) {
                 RCLCPP_WARN(this->get_logger(), "Collision detected for track [%d] with current robot plan!", track.id);
                 
-                double current_dist = std::sqrt(std::pow(track.x(0) - trajectory_.goals.front().p.x, 2) + 
-                                        std::pow(track.x(1) - trajectory_.goals.front().p.y, 2));
-                
-                if (current_dist < d_min) {
-                    d_min = current_dist;
+                if (d_ev_to_ped < d_min) {
+                    d_min = d_ev_to_ped;
                 }
             }
         }
@@ -820,7 +823,9 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
     }
 
     if (use_yield_mode_) {
-        RCLCPP_WARN(this->get_logger(), "Minimum distance to robot in yield mode: %.2f meters", d_min);
+        if (d_min < D_INF) {
+            RCLCPP_WARN(this->get_logger(), "Minimum distance to robot in yield mode: %.2f meters", d_min);
+        }
         dynus_interfaces::msg::YieldMode yield_msg;
         yield_msg.d_min = d_min;
         pub_yield_mode_->publish(yield_msg);

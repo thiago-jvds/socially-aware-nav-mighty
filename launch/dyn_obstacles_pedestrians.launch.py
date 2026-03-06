@@ -9,8 +9,8 @@ from launch.actions import TimerAction, OpaqueFunction, DeclareLaunchArgument
 
 # --- CONFIGURATION ---
 FIXED_Z_HEIGHT = 0.0
-SPAWN_AREA = {"x_min": 2.5, "x_max": 150.0, "y_min": -5.0, "y_max": 5.0}
-HUMAN_SPEED_RANGE = [0.5, 0.8]
+SPAWN_AREA = {"x_min": 2.5, "x_max": 150.0, "y_min": -3.0, "y_max": 3.0}
+HUMAN_SPEED_RANGE = [0.5, 1.5]
 
 # ---------- Helpers ----------
 def _as_bool(context, name, default=False):
@@ -120,6 +120,7 @@ def generate_human_entities(context):
     # We want to distribute Y positions evenly to avoid collisions
     lane_width = (SPAWN_AREA["y_max"] - SPAWN_AREA["y_min"]) / num_pedestrians
     current_y = SPAWN_AREA["y_min"] + (lane_width / 2.0)
+    traj_mode = mode
 
     for i in range(num_pedestrians):
         # 1. Generate Parameters
@@ -138,6 +139,59 @@ def generate_human_entities(context):
         elif mode == 'OVERTAKE':
             x = round(random.uniform(SPAWN_AREA["x_min"], 10.0), 2)
             y = round(random.uniform(-2.0, 2.0), 2)  # Start in the upper half to encourage overtaking
+
+        elif mode == "TWO_WAY_X": # Alternate directions to get an even 50/50 split of pedestrians
+            is_forward = (i % 2 == 0)
+            
+            # Spread them evenly across the Y-axis lanes to prevent immediate clumping
+            y = round(random.uniform(current_y - lane_width/2.0, current_y + lane_width/2.0), 2)
+            y = min(SPAWN_AREA["y_max"], y)
+            current_y += lane_width
+            if current_y > SPAWN_AREA["y_max"]:
+                current_y = SPAWN_AREA["y_min"] + (lane_width / 2.0)
+            
+            if is_forward:
+                # Move +X: Start near x_min, use your existing OVERTAKE logic
+                x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_min"] + 15.0), 2)
+                traj_mode = "OVERTAKE" 
+            else:
+                # Move -X: Start near x_max, use your existing ONE_WAY_X logic
+                x = round(random.uniform(SPAWN_AREA["x_max"] - 15.0, SPAWN_AREA["x_max"]), 2)
+                traj_mode = "ONE_WAY_X"
+        
+        elif mode == "FULL":
+            # Split pedestrians into 3 groups: +X, -X, and +Y (cross-traffic)
+            group = i % 3
+
+            if group == 0:
+                # Move +X
+                x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_min"] + 15.0), 2)
+                y = round(random.uniform(current_y - lane_width/2.0, current_y + lane_width/2.0), 2)
+                y = min(SPAWN_AREA["y_max"], y)
+                traj_mode = "OVERTAKE"
+                
+                current_y += lane_width
+                if current_y > SPAWN_AREA["y_max"]:
+                    current_y = SPAWN_AREA["y_min"] + (lane_width / 2.0)
+
+            elif group == 1:
+                # Move -X
+                x = round(random.uniform(SPAWN_AREA["x_max"] - 15.0, SPAWN_AREA["x_max"]), 2)
+                y = round(random.uniform(current_y - lane_width/2.0, current_y + lane_width/2.0), 2)
+                y = min(SPAWN_AREA["y_max"], y)
+                traj_mode = "ONE_WAY_X"
+
+                current_y += lane_width
+                if current_y > SPAWN_AREA["y_max"]:
+                    current_y = SPAWN_AREA["y_min"] + (lane_width / 2.0)
+
+            else:
+                # Move +Y (Cross-Traffic)
+                # Spread them randomly across the X corridor span
+                x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_max"]), 2)
+                # Give them a random starting Y so they don't all cross at once
+                y = round(random.uniform(-5.0, 5.0), 2)
+                traj_mode = "ONE_WAY_Y"
         else:
             # Random X and Y for other modes
             x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_max"]), 2)
@@ -149,7 +203,7 @@ def generate_human_entities(context):
         # 2. Get Trajectory Strings
         # Note: We pass Spawn Area limits specifically for Corridor calculation
         traj_x_str, traj_y_str, traj_z_str = get_human_trajectory(
-            mode,
+            traj_mode,
             x,
             y,
             z,
