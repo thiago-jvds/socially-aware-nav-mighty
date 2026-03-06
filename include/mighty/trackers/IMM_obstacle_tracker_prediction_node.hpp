@@ -7,6 +7,8 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <dynus_interfaces/msg/dyn_traj.hpp>
+#include <dynus_interfaces/msg/trajectory.hpp>
+#include <dynus_interfaces/msg/yield_mode.hpp>
 #include <mighty/mighty_type.hpp>
 #include <mighty/utils.hpp>
 #include <Eigen/Dense>
@@ -14,8 +16,11 @@
 #include <string>
 #include "base_EKF_tracker.hpp"
 #include <math.h>
+#include <limits>
 
 const int NUM_MODES = 3;
+
+const double D_INF = std::numeric_limits<double>::infinity();
 
 // --- IMM Struct ---
 // Holds the history/prediction of an object
@@ -185,6 +190,7 @@ public:
 private:
     // Callbacks
     void detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg);
+    void trajectoryCallback(const dynus_interfaces::msg::Trajectory::SharedPtr msg);
 
     // 1. Interaction (Mixing Step)
     void interaction(IMMTrack& track, 
@@ -215,12 +221,18 @@ private:
     // --- DynTraj Msgs creation ---       
     Eigen::VectorXd polyfit(const std::vector<double>& t, const std::vector<double>& y, int degree);
     double calculateVariance(const std::vector<double>& t, const std::vector<double>& y, const Eigen::VectorXd& beta, int degree);
-    std::vector<std::pair<double, Eigen::Vector3d>> generatePrediction(const IMMTrack& track, int best_mode);
-    std::vector<std::pair<double, Eigen::Vector3d>> generateMergedPrediction(const IMMTrack& track); 
+    std::vector<std::pair<double, Eigen::Vector4d>> generatePrediction(const IMMTrack& track);    
+    bool checkTrajectoryCollision(
+        const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj,
+        const dynus_interfaces::msg::Trajectory& robot_traj,
+        double collision_threshold,
+        bool check_3d);
     void publishPredictions(const std::vector<Measurement> &measurements);    
 
     // ROS Interfaces
     rclcpp::Subscription<vision_msgs::msg::Detection3DArray>::SharedPtr sub_detections_;
+    rclcpp::Subscription<dynus_interfaces::msg::Trajectory>::SharedPtr sub_trajectory_;
+    rclcpp::Publisher<dynus_interfaces::msg::YieldMode>::SharedPtr pub_yield_mode_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
     rclcpp::Publisher<dynus_interfaces::msg::DynTraj>::SharedPtr pub_predicted_traj_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pred_pos_pub_;
@@ -229,9 +241,6 @@ private:
     // State Variables
     std::vector<IMMTrack> tracks_;
     int track_id_ = 0;
-
-    // IMM Variables
-    Eigen::MatrixXd trans_prob_mat_;      // Transition Probability Matrix (4x4)
 
     double degree_for_pwp_ = 3;
     double degree_for_poly_ = 5;
@@ -259,11 +268,15 @@ private:
     
     // IMM specific params
     double prob_transition_stay_; // Prob of staying in current mode
-    double prob_transition_switch_; // Prob of switching
 
     double sigma_a_CA_      = 1.5;
     double sigma_yaw_CA_    = 0.5;
     double fixed_yaw_rate_    = 0.6;
+
+    // Yield Mode params
+    dynus_interfaces::msg::Trajectory trajectory_;
+    bool trajectory_initialized_;
+    bool use_yield_mode_ = true;
 };
 
 #endif // IMM_OBSTACLE_TRACKER_PREDICTION_NODE_HPP_

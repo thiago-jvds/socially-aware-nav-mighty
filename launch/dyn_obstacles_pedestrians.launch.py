@@ -9,8 +9,8 @@ from launch.actions import TimerAction, OpaqueFunction, DeclareLaunchArgument
 
 # --- CONFIGURATION ---
 FIXED_Z_HEIGHT = 0.0
-SPAWN_AREA = {"x_min": 2.5, "x_max": 70.0, "y_min": -3.0, "y_max": 3.0}
-HUMAN_SPEED_RANGE = [0.5, 1.5]
+SPAWN_AREA = {"x_min": 2.5, "x_max": 150.0, "y_min": -5.0, "y_max": 5.0}
+HUMAN_SPEED_RANGE = [0.5, 0.8]
 
 # ---------- Helpers ----------
 def _as_bool(context, name, default=False):
@@ -90,6 +90,10 @@ def get_human_trajectory(mode, x, y, z, speed, x_min=0, x_max=10, y_min=0, y_max
         initial_offset = x_max - x
         span_x = x_max - x_min
         traj_x = f"{x_max}-(({initial_offset}+{speed}*t)%{span_x})"
+    elif mode == "OVERTAKE":
+        initial_offset = x - x_min
+        span_x = x_max - x_min
+        traj_x = f"{x_min}+(({initial_offset}+{speed}*t)%{span_x})"
 
     # 'STATIC' is just default (no change)
 
@@ -130,6 +134,10 @@ def generate_human_entities(context):
             assert num_pedestrians == 1
             x = round(150.0, 2)
             y = 0.00
+
+        elif mode == 'OVERTAKE':
+            x = round(random.uniform(SPAWN_AREA["x_min"], 10.0), 2)
+            y = round(random.uniform(-2.0, 2.0), 2)  # Start in the upper half to encourage overtaking
         else:
             # Random X and Y for other modes
             x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_max"]), 2)
@@ -256,8 +264,8 @@ def generate_launch_description():
     # Subscribes to 'detected_objects' -> Publishes 'predicted_trajs'
     tracker_node = Node(
         package="mighty",
-        executable="CA_obstacle_tracker_prediction_node",
-        name="CA_obstacle_tracker_prediction",
+        executable="IMM_obstacle_tracker_prediction_node",
+        name="IMM_obstacle_tracker_prediction",
         output="screen",
         namespace="NX01",
         remappings=[
@@ -267,7 +275,6 @@ def generate_launch_description():
             {
                 "visual_level": 2,
                 "prediction_horizon": 3.0,  # seconds
-                "use_hungarian_matching": True,
             }
         ],
     )

@@ -3,7 +3,8 @@
 PurePursuit::PurePursuit()
     : Node("pure_pursuit"),
       state_initialized_(false),
-      trajectory_initialized_(false)
+      trajectory_initialized_(false),
+      yield_mode_initialized_(false)
 {
     // Declare parameters
     this->declare_parameter("L_min", 0.5);
@@ -47,6 +48,10 @@ PurePursuit::PurePursuit()
         "state", 10,
         std::bind(&PurePursuit::stateCallback, this, std::placeholders::_1));
 
+    sub_yield_mode_ = this->create_subscription<dynus_interfaces::msg::YieldMode>(
+        "yield_mode", 10,
+        std::bind(&PurePursuit::yieldModeCallback, this, std::placeholders::_1));
+
     // Control timer
     timer_ = this->create_wall_timer(
         std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate_)),
@@ -63,6 +68,12 @@ void PurePursuit::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
 {
     current_state_ = *msg;
     state_initialized_ = true;
+}
+
+void PurePursuit::yieldModeCallback(const dynus_interfaces::msg::YieldMode::SharedPtr msg)
+{
+    yield_mode_ = *msg;
+    yield_mode_initialized_ = true;
 }
 
 size_t PurePursuit::findClosestWaypointIndex()
@@ -263,8 +274,8 @@ void PurePursuit::controlCallback()
     // Apply speed reductions
     double v_command = v_ref * speed_reduction * goal_speed_factor;
 
-    RCLCPP_INFO(this->get_logger(), "v_ref: %.2f, speed_reduction: %.2f, goal_speed_factor: %.2f, v_command: %.2f, alpha_deg: %.1f",
-                v_ref, speed_reduction, goal_speed_factor, v_command, alpha * 180.0 / M_PI);
+    // RCLCPP_INFO(this->get_logger(), "v_ref: %.2f, speed_reduction: %.2f, goal_speed_factor: %.2f, v_command: %.2f, alpha_deg: %.1f",
+    //             v_ref, speed_reduction, goal_speed_factor, v_command, alpha * 180.0 / M_PI);
 
     // Ensure minimum velocity when not turning in place (avoid stalling)
     if (v_command < 0.05 && abs_alpha < turn_in_place_threshold_)
@@ -294,6 +305,18 @@ void PurePursuit::controlCallback()
 
     // Publish cmd_vel
     geometry_msgs::msg::Twist twist;
+
+    if (yield_mode_initialized_)
+    {
+        // If in yield mode, reduce speed significantly
+        double rediction_factor = reduction(yield_mode_.d_min);
+        v_command *= rediction_factor;
+        w_command *= rediction_factor;
+        if (rediction_factor < 1.0) {
+            RCLCPP_WARN(this->get_logger(), "Yield mode active! Reducing speed by factor %.2f", rediction_factor);
+        }
+    }
+
     twist.linear.x = v_command;
     twist.angular.z = w_command;
     pub_cmd_vel_->publish(twist);

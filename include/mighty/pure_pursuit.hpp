@@ -7,8 +7,34 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <dynus_interfaces/msg/state.hpp>
 #include <dynus_interfaces/msg/trajectory.hpp>
+#include <dynus_interfaces/msg/yield_mode.hpp>
 #include <cmath>
 #include <vector>
+
+static inline double reduction(double d_min) {
+    double max_considered_distance = 10.0;
+    
+    // Clamp at boundaries for safety
+    if (d_min >= max_considered_distance) return 1.0;
+    if (d_min <= 0.0) return 0.0;
+
+    // Your adjustable parameter
+    double d_08 = 3.0; // keep only 20% of speed at 2 meters distance
+
+    // Fast calculation of d_08^4
+    double d08_sq = d_08 * d_08;
+    double d08_4 = d08_sq * d08_sq;
+
+    // Calculate k dynamically so f(d_08) always equals exactly 0.2
+    // std::log(0.8) is approximately -0.22314
+    double k = std::log(0.8) / d08_4; 
+
+    // Fast calculation of d_min^4
+    double d_min_sq = d_min * d_min;
+    double d_min_4 = d_min_sq * d_min_sq;
+
+    return 1.0 - std::exp(k * d_min_4);
+}
 
 class PurePursuit : public rclcpp::Node
 {
@@ -18,6 +44,7 @@ public:
 private:
     void trajectoryCallback(const dynus_interfaces::msg::Trajectory::SharedPtr msg);
     void stateCallback(const dynus_interfaces::msg::State::SharedPtr msg);
+    void yieldModeCallback(const dynus_interfaces::msg::YieldMode::SharedPtr msg);
     void controlCallback();
 
     size_t findClosestWaypointIndex();
@@ -31,13 +58,16 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_lookahead_marker_;
     rclcpp::Subscription<dynus_interfaces::msg::Trajectory>::SharedPtr sub_trajectory_;
     rclcpp::Subscription<dynus_interfaces::msg::State>::SharedPtr sub_state_;
+    rclcpp::Subscription<dynus_interfaces::msg::YieldMode>::SharedPtr sub_yield_mode_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     // State
     dynus_interfaces::msg::State current_state_;
     dynus_interfaces::msg::Trajectory trajectory_;
+    dynus_interfaces::msg::YieldMode yield_mode_;
     bool state_initialized_;
     bool trajectory_initialized_;
+    bool yield_mode_initialized_;
 
     // Parameters
     double L_min_;        // Minimum lookahead distance (m)

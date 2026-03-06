@@ -136,8 +136,8 @@ def generate_launch_description():
                     PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles_pedestrians.launch.py'])
                 ),
                 launch_arguments={
-                    "num_obstacles": "10",
-                    "mode": "ONE_WAY_X",
+                    "num_obstacles": "15",
+                    "mode": "ONE_WAY_Y",
                     "urdf_xacro": "human_box.urdf.xacro",
                     "spawn_interval": "1.0",
                     "use_sim_time": 'true',

@@ -129,9 +129,9 @@ mighty_node:
         default_goal_z: 0.0                     # [m] Default goal height (ground level)
         
         # Debug flags
-        global_planner_verbose: true           # debug output
-        debug_verbose: true                    # [-] Verbose the debug information
-        closed_form_traj_verbose: true         # Verbosity of closed-form traj.
+        global_planner_verbose: false           # debug output
+        debug_verbose: false                    # [-] Verbose the debug information
+        closed_form_traj_verbose: false         # Verbosity of closed-form traj.
         verbose_computation_time: false         # [-] Verbose the computation time
 
         # Map parameters

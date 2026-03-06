@@ -188,9 +188,9 @@ public:
         double px = x(0), py = x(1), pz = x(2);
         double v  = x(3), th = x(4), ph = x(5);
 
-        if (v <= 0.0) {
-            std::cout << "CV got negative velocity" << std::endl;
-        }
+        // if (v <= 0.0) {
+        //     std::cout << "CV got negative velocity" << std::endl;
+        // }
 
         setQ(dt);
 
@@ -279,9 +279,9 @@ public:
         double v  = x(3), th   = x(4), ph   = x(5);
         double a  = x(6); 
 
-        if (v <= 0.0) {
-            std::cout << "CA got negative velocity" << std::endl;
-        }
+        // if (v <= 0.0) {
+        //     std::cout << "CA got negative velocity" << std::endl;
+        // }
 
         setQ(dt);
 
@@ -366,9 +366,9 @@ public:
         double v  = x(3), th   = x(4), ph   = x(5); 
         double th_d = x(7);
 
-        if (v <= 0.0) {
-            std::cout << "CT got negative velocity" << std::endl;
-        }
+        // if (v <= 0.0) {
+        //     std::cout << "CT got negative velocity" << std::endl;
+        // }
 
         setQ(dt);
 

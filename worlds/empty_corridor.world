@@ -80,10 +80,10 @@
       <static>1</static>
       
       <link name='wall_positive'>
-        <pose>0 3.1 1.0 0 0 0</pose> <collision name='collision'>
+        <pose>0 3.1 0.0 0 0 0</pose> <collision name='collision'>
           <geometry>
             <box>
-              <size>200 0.2 2.0</size> </box>
+              <size>200 2.0 4.0</size> </box>
           </geometry>
           <max_contacts>10</max_contacts>
           <surface>
@@ -99,7 +99,7 @@
         <visual name='visual'>
           <geometry>
             <box>
-              <size>200 0.2 2.0</size>
+              <size>200 2.0 4.0</size>
             </box>
           </geometry>
           <material>
@@ -112,10 +112,10 @@
       </link>
 
       <link name='wall_negative'>
-        <pose>0 -3.1 1.0 0 0 0</pose> <collision name='collision'>
+        <pose>0 -3.1 0.0 0 0 0</pose> <collision name='collision'>
           <geometry>
             <box>
-              <size>200 0.2 2.0</size>
+              <size>200 2.0 4.0</size>
             </box>
           </geometry>
           <max_contacts>10</max_contacts>
@@ -132,7 +132,7 @@
         <visual name='visual'>
           <geometry>
             <box>
-              <size>200 0.2 2.0</size>
+              <size>200 2.0 4.0</size>
             </box>
           </geometry>
           <material>

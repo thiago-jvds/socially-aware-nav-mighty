@@ -168,20 +168,20 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
                 'ros2 run mighty convert_odom_to_state --ros-args -r __ns:=/NX01 -r odom:=odom -r state:=state'
             ] if use_ground_robot else ['echo "Skipping convert_odom_to_state (UAV mode)"']
         },
-        # ACL mapper
-        {
-            'shell_command': [
-                'sleep 10',
-                f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
-                f'param_file:={"global_mapper_ground_robot.yaml" if use_ground_robot else "global_mapper.yaml"}'
-            ]
-        },
         # Onboard agent NX01
         {
             'shell_command': [
                 'sleep 10',
                 f'ros2 launch mighty onboard_mighty.launch.py x:={start_x} y:={start_y} z:={start_z} yaw:={start_yaw} '
                 f'sim_env:={sim_env} use_ground_robot:={str(use_ground_robot).lower()}'
+            ]
+        },
+        # ACL mapper
+        {
+            'shell_command': [
+                'sleep 10',
+                f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                f'param_file:={"global_mapper_ground_robot.yaml" if use_ground_robot else "global_mapper.yaml"}'
             ]
         },
         # Goal sender

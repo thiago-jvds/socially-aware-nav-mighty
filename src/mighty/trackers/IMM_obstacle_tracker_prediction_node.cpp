@@ -57,8 +57,6 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
 
     // IMM Tuning Parameters
     this->declare_parameter("prob_transition_stay", 0.85);   // High probability to stay in current mode
-    this->declare_parameter("prob_transition_switch", 0.15); // Low probability to switch
-
 
     // Set parameters
     visual_level_ = this->get_parameter("visual_level").as_int();
@@ -75,21 +73,31 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     velocity_threshold_ = this->get_parameter("velocity_threshold").as_double();
     acceleration_threshold_ = this->get_parameter("acceleration_threshold").as_double();
     prob_transition_stay_ = this->get_parameter("prob_transition_stay").as_double();
-    prob_transition_switch_ = this->get_parameter("prob_transition_switch").as_double();
     tracker_debug_ = this->get_parameter("tracker_debug").as_bool();
 
     // 2. Pub/Sub
     sub_detections_ = this->create_subscription<vision_msgs::msg::Detection3DArray>(
         "detected_objects", 10, 
         std::bind(&IMMObstacleTrackerPredictionNode::detectionsCallback, this, _1));
+    
+    sub_trajectory_ = this->create_subscription<dynus_interfaces::msg::Trajectory>(
+        "trajectory", 10,
+        std::bind(&IMMObstacleTrackerPredictionNode::trajectoryCallback, this, std::placeholders::_1));
 
     pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("tracked_obstacles", 10);
     pub_predicted_traj_ = this->create_publisher<dynus_interfaces::msg::DynTraj>("predicted_trajs", 10);
 
     pred_pos_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("predicted_positions", 10);
     pred_vel_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("predicted_velocities", 10);
+    pub_yield_mode_ = this->create_publisher<dynus_interfaces::msg::YieldMode>("yield_mode", 10);
 
     RCLCPP_INFO(this->get_logger(), " IMM Tracker & Prediction Initialized.");
+}
+
+void IMMObstacleTrackerPredictionNode::trajectoryCallback(const dynus_interfaces::msg::Trajectory::SharedPtr msg)
+{
+    trajectory_ = *msg;
+    trajectory_initialized_ = true;
 }
 
 void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg)
@@ -463,10 +471,10 @@ void IMMObstacleTrackerPredictionNode::combine(IMMTrack& track)
     }
 }
             
-std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode::generateMergedPrediction(
+std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode::generatePrediction(
     const IMMTrack& track)
 {
-     std::vector<std::pair<double, Eigen::Vector3d>> trajectory;    
+     std::vector<std::pair<double, Eigen::Vector4d>> trajectory;    
 
     // --- 1. Set Horizon based on Mode ---
     int num_steps = std::ceil(prediction_horizon_ / prediction_dt_);
@@ -475,6 +483,10 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
     std::array<double, NUM_MODES> x, y, z, v, th, ph, a, th_d, ph_d;
 
     Eigen::VectorXd current_probs = track.mode_probs;
+
+    if (tracker_debug_) {
+        RCLCPP_INFO(this->get_logger(), " [Track %d] v: %.3f, a: %.3f, th: %.3f, th_d: %.3f", track.id, v, a, th, th_d);
+    }
 
     // initialize
     for (int m = 0; m < NUM_MODES; m++) {
@@ -502,16 +514,20 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
     // --- 2. Step-by-Step Integration ---
     for (int step = 0; step < num_steps; ++step) {
         double t = step * prediction_dt_;
-        double x_mixed, y_mixed, z_mixed;
+        double x_mixed, y_mixed, z_mixed, cos_mixed, sin_mixed;
         x_mixed = 0.0;
         y_mixed = 0.0;
         z_mixed = 0.0;
+        cos_mixed = 0.0;
+        sin_mixed = 0.0;
 
         for (int m = 0; m < NUM_MODES; m++) {
             // mix
             x_mixed += current_probs(m) * x[m];
             y_mixed += current_probs(m) * y[m];
             z_mixed += current_probs(m) * z[m];
+            cos_mixed += current_probs(m) * cos(th[m]);
+            sin_mixed += current_probs(m) * sin(th[m]);
             
             // integrate
             double dist = v[m] * prediction_dt_ + 0.5 * a[m] * std::pow(prediction_dt_, 2);
@@ -531,64 +547,10 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
             if  (a[m] > 8.0) a[m] = 8.0;
             if (a[m] < -8.0) a[m] = -8.0;
         }
-        trajectory.push_back({t, Eigen::Vector3d(x_mixed, y_mixed, z_mixed)});
+        double th_mixed = std::atan2(sin_mixed, cos_mixed);
+        trajectory.push_back({t, Eigen::Vector4d(x_mixed, y_mixed, z_mixed, th_mixed)});
 
         current_probs = track.trans_prob_mat_.transpose() * current_probs;
-    }
-
-    return trajectory;
-}
-
-std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode::generatePrediction(
-    const IMMTrack& track, const int best_mode)
-{
-    std::vector<std::pair<double, Eigen::Vector3d>> trajectory;    
-
-    // --- 1. Set Horizon based on Mode ---
-    int num_steps = std::ceil(prediction_horizon_ / prediction_dt_);
-
-    // --- 2. Initialize Simulation State ---
-    double x    = track.models[best_mode]->x(0);
-    double y    = track.models[best_mode]->x(1);
-    double z    = track.models[best_mode]->x(2);
-    double v    = track.models[best_mode]->x(3);
-    double th   = track.models[best_mode]->x(4);
-    double ph   = track.models[best_mode]->x(5);
-    double a    = track.models[best_mode]->x(6);
-    double th_d = track.models[best_mode]->x(7);
-    double ph_d = track.models[best_mode]->x(8);
-
-    if  (v > 5.0) v = 5.0;
-    if (v < -5.0) v = -5.0;
-
-    if  (a > 8.0) a = 8.0;
-    if (a < -8.0) a = -8.0;
-
-    if (tracker_debug_) {
-        RCLCPP_INFO(this->get_logger(), " [Track %d] v: %.3f, a: %.3f, th: %.3f, th_d: %.3f", track.id, v, a, th, th_d);
-    }
-
-    // --- 3. Step-by-Step Integration ---
-    for (int step = 0; step < num_steps; ++step) {
-        double t = step * prediction_dt_;
-        trajectory.push_back({t, Eigen::Vector3d(x, y, z)});
-
-        double dist = v * prediction_dt_ + 0.5 * a * std::pow(prediction_dt_, 2);
-
-        x += dist * cos(ph) * cos(th);
-        y += dist * cos(ph) * sin(th);
-        z += dist * sin(ph);
-
-        th += th_d * prediction_dt_;
-        ph += ph_d * prediction_dt_;
-
-        v += a * prediction_dt_;
-
-        if  (v > 5.0) v = 5.0;
-        if (v < -5.0) v = -5.0;
-
-        if  (a > 8.0) a = 8.0;
-        if (a < -8.0) a = -8.0;
     }
 
     return trajectory;
@@ -598,12 +560,78 @@ std::vector<std::pair<double, Eigen::Vector3d>> IMMObstacleTrackerPredictionNode
 // EKF PREDICTION IMPLEMENTATION
 // =================================================================================
 
+bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollision(
+    const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj,
+    const dynus_interfaces::msg::Trajectory& robot_traj,
+    double collision_threshold,
+    bool check_3d = false) 
+{
+    // Edge case: empty trajectories
+    if (ped_traj.empty() || robot_traj.goals.empty()) {
+        return false;
+    }
+
+    double robot_dt = robot_traj.dt; // Should be 0.01
+    double ped_dt = prediction_dt_;;
+
+    // Evaluate collision at every step of the robot's plan
+    for (size_t i = 0; i < robot_traj.goals.size(); ++i) {
+        double current_t = i * robot_dt;
+
+        // Find the corresponding indices in the pedestrian trajectory
+        size_t ped_idx = static_cast<size_t>(current_t / ped_dt);
+
+        // If the robot's plan extends beyond our pedestrian prediction horizon, 
+        // we stop checking (or you could assume the pedestrian stays at their last position)
+        if (ped_idx >= ped_traj.size() - 1) {
+            break; 
+        }
+
+        // --- Linear Interpolation of Pedestrian Position ---
+        double t0 = ped_traj[ped_idx].first;
+        double t1 = ped_traj[ped_idx + 1].first;
+        
+        Eigen::Vector3d p0 = ped_traj[ped_idx].second.head<3>(); // Extract (x, y, z) from the trajectory point
+        Eigen::Vector3d p1 = ped_traj[ped_idx + 1].second.head<3>();
+
+        // How far along are we between t0 and t1? (Values 0.0 to 1.0)
+        double interpolation_ratio = (current_t - t0) / (t1 - t0);
+        
+        Eigen::Vector3d ped_pos_at_t = p0 + interpolation_ratio * (p1 - p0);
+
+        // --- Fetch Robot Position ---
+        Eigen::Vector3d robot_pos_at_t(
+            robot_traj.goals[i].p.x, 
+            robot_traj.goals[i].p.y, 
+            robot_traj.goals[i].p.z
+        );
+
+        // --- Distance Calculation ---
+        double distance;
+        if (check_3d) {
+            // Spherical collision check
+            distance = (ped_pos_at_t - robot_pos_at_t).norm();
+        } else {
+            // Cylindrical / Ground plane collision check (ignoring Z)
+            distance = (ped_pos_at_t.head<2>() - robot_pos_at_t.head<2>()).norm();
+        }
+
+        // --- Collision Check ---
+        if (distance <= collision_threshold) {
+            return true; // Imminent collision detected!
+        }
+    }
+
+    return false; // Path is clear
+}
+
 void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Measurement> &measurements)
 {
     
     visualization_msgs::msg::MarkerArray markers;
     int id = 0;
     int num_steps = static_cast<int>(prediction_horizon_ / prediction_dt_); // Number of steps
+    double d_min = D_INF;
     
     // Initialize knots and positions
     std::vector<double> t_values;
@@ -618,48 +646,29 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         int best_mode = 0;
         track.mode_probs.maxCoeff(&best_mode);
 
-        if (tracker_debug_) {
-            std::string mode_names[] = {"CV", "BRAKING"};
-
-            // --- 2. Determine Color Based on Mode ---
-            std_msgs::msg::ColorRGBA mode_color;
-            mode_color.a = 1.0;
-            if (best_mode == MODE_FWD)          { mode_color.r = 0.0; mode_color.g = 1.0; mode_color.b = 0.0; } // Green
-            else if (best_mode == MODE_LEFT)    { mode_color.r = 1.0; mode_color.g = 0.0; mode_color.b = 0.0; } // Red
-            else if (best_mode == MODE_RIGHT)   { mode_color.r = 0.0; mode_color.g = 0.0; mode_color.b = 1.0; } // Blue
-
-            // --- 3. Add Status Text Marker ---
-            visualization_msgs::msg::Marker text_marker;
-            text_marker.header.frame_id = frame_id_;
-            text_marker.header.stamp = this->now();
-            text_marker.id = id++;
-            text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-            text_marker.action = visualization_msgs::msg::Marker::ADD;
-            
-            // Position text 1.5m above the object
-            text_marker.pose.position.x = track.x(0);
-            text_marker.pose.position.y = track.x(1);
-            text_marker.pose.position.z = track.x(2) + 1.5;
-            text_marker.scale.z = 0.4; // Text height
-            text_marker.color.r = 1.0; text_marker.color.g = 1.0; text_marker.color.b = 1.0; text_marker.color.a = 1.0;
-
-            // Display ID, Best Mode, and Probability
-            std::stringstream ss;
-            ss << "ID: " << track.id << "\n" 
-            << mode_names[best_mode] << " (" << std::fixed << std::setprecision(2) << track.mode_probs(best_mode) << ")";
-            text_marker.text = ss.str();
-            markers.markers.push_back(text_marker);
-        }
-
         // if (fabs(track.x(3)) <= velocity_threshold_) continue;
 
         // if (fabs(track.x(6)) <= acceleration_threshold_) continue;
 
-        std::vector<std::pair<double, Eigen::Vector3d>> predicted_trajectory = generatePrediction(track, best_mode);
-        std::vector<std::pair<double, Eigen::Vector3d>> predicted_merged_trajectory = generateMergedPrediction(track);
+        std::vector<std::pair<double, Eigen::Vector4d>> predicted_trajectory = generatePrediction(track);
 
-        // for now, keep best mode data
-        for (const auto& pt : predicted_merged_trajectory) {
+        if (use_yield_mode_ && trajectory_initialized_) {
+            double collision_threshold = 1.0; // meters, can be tuned or made a parameter
+
+            bool collision = checkTrajectoryCollision(predicted_trajectory, trajectory_, collision_threshold, false);
+            if (collision) {
+                RCLCPP_WARN(this->get_logger(), "Collision detected for track [%d] with current robot plan!", track.id);
+                
+                double current_dist = std::sqrt(std::pow(track.x(0) - trajectory_.goals.front().p.x, 2) + 
+                                        std::pow(track.x(1) - trajectory_.goals.front().p.y, 2));
+                
+                if (current_dist < d_min) {
+                    d_min = current_dist;
+                }
+            }
+        }
+
+        for (const auto& pt : predicted_trajectory) {
             t_values.push_back(pt.first);
             x_values.push_back(pt.second(0));
             y_values.push_back(pt.second(1));
@@ -667,14 +676,14 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         }
 
         // --- Helper Lambda to generate markers for ANY trajectory ---
-        auto add_trajectory_markers = [&](const std::vector<std::pair<double, Eigen::Vector3d>>& traj, 
+        auto add_trajectory_markers = [&](const std::vector<std::pair<double, Eigen::Vector4d>>& traj, 
                                           float r, float g, float b, float a, float scale_x,
                                           const std::string& ns) 
         {
             for (size_t k = 0; k < traj.size() - 1; ++k)
             {
-                Eigen::Vector3d p_curr = traj[k].second;
-                Eigen::Vector3d p_next = traj[k+1].second;
+                Eigen::Vector3d p_curr = traj[k].second.head<3>(); // Extract (x, y, z) from the trajectory point
+                Eigen::Vector3d p_next = traj[k+1].second.head<3>();
                 
                 visualization_msgs::msg::Marker marker;
                 marker.header.frame_id = frame_id_;
@@ -711,10 +720,10 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
             }
         };
 
-        add_trajectory_markers(predicted_trajectory, 
-                               1.0, 0.0, 0.0, 1.0, 0.1, "best_mode_traj");
+        // add_trajectory_markers(predicted_trajectory, 
+        //                        1.0, 0.0, 0.0, 1.0, 0.1, "best_mode_traj");
 
-        add_trajectory_markers(predicted_merged_trajectory, 
+        add_trajectory_markers(predicted_trajectory, 
                                1.0, 1.0, 0.0, 1.0, 0.1, "merged_mode_traj");
 
         // Check if x_values, y_values, z_values changed much (especially in the beginning, the predicted trajectories can be very short and hard to fit)
@@ -800,7 +809,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         msg.poly_end_time = current_time + prediction_horizon_;
 
         msg.is_agent = false;
-        pub_predicted_traj_->publish(msg);
+        // pub_predicted_traj_->publish(msg);
 
         // Clear the vectors for the next EKF state
         t_values.clear();
@@ -808,28 +817,13 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         y_values.clear();
         z_values.clear();
 
-        // if (initial_velocity.norm() > velocity_threshold_)
-        // {
-        //     // Publish predicted position 
-        //     geometry_msgs::msg::PoseStamped pred_pos_msg;
-        //     pred_pos_msg.header.stamp = this->now();
-        //     // pred_pos_msg.header.stamp = pc_timestamp_;
-        //     pred_pos_msg.header.frame_id = frame_id_; 
-        //     pred_pos_msg.pose.position.x = initial_position[0];
-        //     pred_pos_msg.pose.position.y = initial_position[1];
-        //     pred_pos_msg.pose.position.z = initial_position[2];
-        //     pred_pos_pub_->publish(pred_pos_msg);
+    }
 
-        //     geometry_msgs::msg::TwistStamped pred_vel_msg;
-        //     pred_vel_msg.header.stamp = this->now();
-        //     // pred_vel_msg.header.stamp = pc_timestamp_;
-        //     pred_vel_msg.header.frame_id = frame_id_; 
-        //     pred_vel_msg.twist.linear.x = initial_velocity[0];
-        //     pred_vel_msg.twist.linear.y = initial_velocity[1];
-        //     pred_vel_msg.twist.linear.z = initial_velocity[2];
-        //     pred_vel_pub_->publish(pred_vel_msg);
-        // }
-
+    if (use_yield_mode_) {
+        RCLCPP_WARN(this->get_logger(), "Minimum distance to robot in yield mode: %.2f meters", d_min);
+        dynus_interfaces::msg::YieldMode yield_msg;
+        yield_msg.d_min = d_min;
+        pub_yield_mode_->publish(yield_msg);
     }
 
     // Publish the marker array with predicted trajectories
