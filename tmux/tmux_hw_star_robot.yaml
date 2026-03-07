@@ -35,7 +35,7 @@ windows:
       # ======= DLIO =======
       - shell_command:
         - source /home/swarm/code/dlio_ws/install/setup.bash
-        - ros2 launch direct_lidar_inertial_odometry dlio.launch.py namespace:=$VEHNAME pointcloud_topic:="/$VEHNAME/livox/lidar" imu_topic:="/$VEHNAME/livox/imu" config_file:="dlio_tilted_20deg.yaml"
+        - ros2 launch direct_lidar_inertial_odometry dlio.launch.py namespace:=$VEHNAME pointcloud_topic:="/$VEHNAME/livox/lidar" imu_topic:="/$VEHNAME/livox/imu" config_file_name:="dlio_tilted_20deg.yaml"
 
       # ======= Republish rviz 2D goal to term goal =======
       - shell_command:
@@ -45,11 +45,15 @@ windows:
       # ======= Global Mapper =======
       - shell_command:
         - source /home/swarm/code/acl_mapping_ws/install/setup.bash
-        - ros2 launch global_mapper_ros global_mapper_node.launch.py quad:="$VEHNAME" depth_pointcloud_topic:="livox/lidar" pose_topic:="dlio/odom_node/pose" odom_topic:="dlio/odom_node/odom" param_file:="global_mapper_ground_robot.yaml"
+        - ros2 launch global_mapper_ros global_mapper_node.launch.py quad:="$VEHNAME" depth_pointcloud_topic:="livox/lidar" pose_topic:="dlio/odom_node/pose" odom_topic:="dlio/odom_node/odom" param_file:="global_mapper.yaml"
 
       # ======= RVIZ =======
+      # - shell_command:
+      #   - source /home/swarm/code/decomp_ws/install/setup.bash
+      #   - source /home/swarm/code/mighty_ws/install/setup.bash
+      #   - rviz2 rviz2 -d /home/swarm/code/mighty_ws/src/mighty/rviz/mighty_hw_ground_robot.rviz
+  
+     # ======= Static TF for map to world bag_perception_node =======
       - shell_command:
-        - source /home/swarm/code/decomp_ws/install/setup.bash
         - source /home/swarm/code/mighty_ws/install/setup.bash
-        - rviz2 rviz2 -d /home/swarm/code/mighty_ws/src/mighty/rviz/mighty_hw_ground_robot.rviz
-
+        - ros2 run tf2_ros static_transform_publisher 3.0 0 0 0 0 0 1 map world
