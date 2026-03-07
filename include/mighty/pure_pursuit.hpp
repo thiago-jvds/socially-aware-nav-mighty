@@ -11,31 +11,6 @@
 #include <cmath>
 #include <vector>
 
-static inline double reduction(double d_min) {
-    double max_considered_distance = 10.0;
-    
-    // Clamp at boundaries for safety
-    if (d_min >= max_considered_distance) return 1.0;
-    if (d_min <= 0.0) return 0.0;
-
-    // Your adjustable parameter
-    double d_08 = 3.0; // keep only 20% of speed at 2 meters distance
-
-    // Fast calculation of d_08^4
-    double d08_sq = d_08 * d_08;
-    double d08_4 = d08_sq * d08_sq;
-
-    // Calculate k dynamically so f(d_08) always equals exactly 0.2
-    // std::log(0.8) is approximately -0.22314
-    double k = std::log(0.8) / d08_4; 
-
-    // Fast calculation of d_min^4
-    double d_min_sq = d_min * d_min;
-    double d_min_4 = d_min_sq * d_min_sq;
-
-    return 1.0 - std::exp(k * d_min_4);
-}
-
 class PurePursuit : public rclcpp::Node
 {
 public:
@@ -83,6 +58,24 @@ private:
     bool use_hardware_;
     std::string map_frame_id_;
     double prev_w_command_ = 0.0;
+
+    double d_08_4_;                   // precomputed d_08^4 for yield mode reduction
+    double max_considered_distance_;  // beyond this distance, no yield mode reduction is applied
+
+    inline double yield_mode_reduction(double d_min) {
+        // Clamp at boundaries for safety
+        if (d_min >= max_considered_distance_) return 1.0;
+        if (d_min <= 0.0) return 0.0;
+
+        // Calculate k dynamically so f(d_08) always equals exactly 0.2
+        // ln(0.8) = -0.223143551314
+        const double k = -0.223143551314 / d_08_4_; 
+
+        // Fast calculation of d_min^4
+        const double d_min_sq = d_min * d_min;
+
+        return 1.0 - std::exp(k * d_min_sq * d_min_sq);
+    }
 };
 
 #endif // PURE_PURSUIT_HPP

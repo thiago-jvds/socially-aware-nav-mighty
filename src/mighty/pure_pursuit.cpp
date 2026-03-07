@@ -20,6 +20,10 @@ PurePursuit::PurePursuit()
     this->declare_parameter("use_hardware", false);
     this->declare_parameter("map_frame_id", "map");
 
+    // Yield mode parameters
+    this->declare_parameter("d_08", 3.0);   // distance at which to reduce 80% of speed          
+    this->declare_parameter("max_considered_distance", 10.0); // beyond this distance, no reduction is applied
+
     // Get parameters
     L_min_ = this->get_parameter("L_min").as_double();
     k_v_ = this->get_parameter("k_v").as_double();
@@ -33,6 +37,11 @@ PurePursuit::PurePursuit()
     w_smoothing_alpha_ = this->get_parameter("w_smoothing_alpha").as_double();
     use_hardware_ = this->get_parameter("use_hardware").as_bool();
     map_frame_id_ = this->get_parameter("map_frame_id").as_string();
+    double d_08 = this->get_parameter("d_08").as_double();
+    max_considered_distance_ = this->get_parameter("max_considered_distance").as_double();
+
+    double d_08_sq = d_08 * d_08; 
+    d_08_4_ = d_08_sq * d_08_sq; // precompute for efficiency
 
     // Publishers and Subscribers
     std::string cmd_vel_string = use_hardware_ ? "cmd_vel_auto" : "cmd_vel";
@@ -309,12 +318,11 @@ void PurePursuit::controlCallback()
     if (yield_mode_initialized_)
     {
         // If in yield mode, reduce speed significantly
-        double rediction_factor = reduction(yield_mode_.d_min);
+        double rediction_factor = yield_mode_reduction(yield_mode_.d_min);
         v_command *= rediction_factor;
         w_command *= rediction_factor;
-        if (rediction_factor < 1.0) {
-            RCLCPP_WARN(this->get_logger(), "Yield mode active! Reducing speed by factor %.2f", rediction_factor);
-        }
+
+        RCLCPP_WARN(this->get_logger(), "Yield mode active! Reducing speed by factor %.2f. Initial speed: %.2f", rediction_factor, v_ref);
     }
 
     twist.linear.x = v_command;

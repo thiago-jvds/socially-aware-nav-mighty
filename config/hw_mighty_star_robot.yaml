@@ -243,3 +243,7 @@ mighty_node:
         pure_pursuit_turn_in_place_threshold_deg: 60.0  # [deg] Heading error threshold for turn-in-place behavior
         pure_pursuit_slow_down_threshold_deg: 20.0      # [deg] Heading error threshold for speed reduction
         pure_pursuit_w_smoothing_alpha: 0.5             # [-] Angular velocity smoothing (0 = no smoothing, 1 = full smoothing)
+
+        # Pure pursuit controller parameters for yield mode (for vehicle_type: "ground_robot")
+        pure_pursuit_d_08: 1.5                          # [m] distance at which to reduce 80% of speed
+        pure_pursuit_max_considered_distance: 10.0      # [m] beyond this distance, no reduction is applied 
