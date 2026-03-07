@@ -151,7 +151,7 @@ ament_target_dependencies(fake_sim_perception_node rclcpp nav_msgs vision_msgs v
 # For bag reading
 add_executable(bag_perception_node src/mighty/trackers/bag_perception_node.cpp)
 target_link_libraries(bag_perception_node)
-ament_target_dependencies(bag_perception_node rclcpp geometry_msgs vision_msgs visualization_msgs)
+ament_target_dependencies(bag_perception_node rclcpp geometry_msgs vision_msgs visualization_msgs   tf2_geometry_msgs tf2 tf2_ros )
 
 
 

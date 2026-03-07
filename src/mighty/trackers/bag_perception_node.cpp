@@ -6,6 +6,9 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 class BagPerceptionNode : public rclcpp::Node
 {
@@ -22,6 +25,9 @@ public:
         );
 
         std::vector<std::string> target_topics = this->get_parameter("target_topics").as_string_array();
+
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         // Publisher: Sends detections to tracker
         det_pub_ = this->create_publisher<vision_msgs::msg::Detection3DArray>(
@@ -53,7 +59,7 @@ public:
 private:
     // Changed id to string to match the topic names
     void odomCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg, const std::string& id) {
-        latest_poses_[id] = msg->pose;
+        latest_poses_[id] = *msg;
     }
 
     void publishDetections() {
@@ -69,11 +75,31 @@ private:
 
         int marker_id = 0;
 
-        for (auto const& [id, pose] : latest_poses_) {
+        for (auto const& [id, pose_stamped_msg] : latest_poses_) {
+            geometry_msgs::msg::PoseStamped transformed_pose_msg;
+            
+            try {
+                geometry_msgs::msg::PoseStamped pose_to_transform = pose_stamped_msg;
+                // Override the timestamp to 0. This guarantees we get the latest available 
+                // transform and avoids slight extrapolation errors between topic rates and TF rates.
+                pose_to_transform.header.stamp.sec = 0;
+                pose_to_transform.header.stamp.nanosec = 0;
+
+                // 4. Transform the pose into the target frame_id_ ("map")
+                transformed_pose_msg = tf_buffer_->transform(pose_to_transform, frame_id_);
+            } catch (const tf2::TransformException & ex) {
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 1000, 
+                    "Could not transform %s to %s: %s", 
+                    pose_stamped_msg.header.frame_id.c_str(), frame_id_.c_str(), ex.what()
+                );
+                continue; // Skip this object if TF isn't ready
+            }
+
             // --- 1. Create Detection Message ---
             vision_msgs::msg::Detection3D detection;
             detection.header = output_msg.header;
-            detection.bbox.center = pose;
+            detection.bbox.center = transformed_pose_msg.pose; // Use transformed pose
             detection.bbox.center.position.z = 0.0;
             detection.bbox.size.x = box_x;
             detection.bbox.size.y = box_y;
@@ -89,7 +115,7 @@ private:
             marker.type = visualization_msgs::msg::Marker::CUBE;
             marker.action = visualization_msgs::msg::Marker::ADD;
 
-            marker.pose = pose;
+            marker.pose = transformed_pose_msg.pose; // Use transformed pose
             marker.scale.x = box_x;
             marker.scale.y = box_y;
             marker.scale.z = box_z;
@@ -109,11 +135,14 @@ private:
 
     std::string frame_id_;
     // Map key changed to string to accommodate named topics
-    std::map<std::string, geometry_msgs::msg::Pose> latest_poses_;
+    std::map<std::string, geometry_msgs::msg::PoseStamped> latest_poses_;
     std::vector<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr> subs_;
     rclcpp::Publisher<vision_msgs::msg::Detection3DArray>::SharedPtr det_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_; 
     rclcpp::TimerBase::SharedPtr timer_;
+
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 };
 
 int main(int argc, char ** argv) {
