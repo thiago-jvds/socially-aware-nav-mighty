@@ -35,7 +35,7 @@
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>100 100</size>
+              <size>300 300</size>
             </plane>
           </geometry>
           <surface>
@@ -61,7 +61,7 @@
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>100 100</size>
+              <size>300 300</size>
             </plane>
           </geometry>
           <material>
