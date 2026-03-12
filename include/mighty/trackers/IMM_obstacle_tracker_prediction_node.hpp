@@ -15,10 +15,12 @@
 #include <vector>
 #include <string>
 #include "base_EKF_tracker.hpp"
+#include "base_KF_tracker.hpp"
 #include <math.h>
 #include <limits>
 
 const int NUM_MODES = 3;
+const bool use_linear_KF = true;
 
 const double D_INF = std::numeric_limits<double>::infinity();
 
@@ -31,12 +33,12 @@ struct IMMTrack {
     std_msgs::msg::ColorRGBA color;
 
     // The Overall Combined State
-    Eigen::VectorXd x;    // [x, y, z, v, theta, phi, a, theta_dot, phi_dot]  
+    Eigen::VectorXd x; 
     Eigen::MatrixXd P; 
     Eigen::MatrixXd R;     
 
     // The Independent Models
-    std::vector<std::shared_ptr<BaseEKFModel>> models;
+    std::vector<std::shared_ptr<IMMTrackerModel>> models;
     
     // IMM Math Vectors
     Eigen::VectorXd mode_probs;
@@ -64,10 +66,19 @@ struct IMMTrack {
         // Set P
         P = Eigen::MatrixXd::Identity(state_dim, state_dim);
         P.block<3,3>(0, 0) *= 0.5;
-        P(3, 3) = 25.0; // v
-        P(4, 4) = M_PI; // th
-        P(6, 6) = 5.0;  // a
-        
+        if (use_linear_KF) {
+            P(3, 3) = 1.0; // vx
+            P(4, 4) = 1.0; // vy
+            P(5, 5) = 1.0; // vz
+            P(6, 6) = 5.0; // ax
+            P(7, 7) = 5.0; // ay
+            P(8, 8) = 5.0; // az
+        } else {
+            P(3, 3) = 25.0; // v
+            P(4, 4) = M_PI; // th
+            P(6, 6) = 5.0;  // a
+        }
+
         // Set R
         R = Eigen::MatrixXd::Identity(3, 3);
         R(0,0) = 0.1; // X noise
@@ -78,10 +89,16 @@ struct IMMTrack {
         int num_modes = NUM_MODES; 
         
         // Push your specific derived models
-        models.push_back(std::make_shared<CVModel>(state_dim, meas_dim, 0.01, sigma_yaw_CA, MODE_FWD));
-        models.push_back(std::make_shared<CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA, MODE_FWD));
-        models.push_back(std::make_shared<CTModel>(state_dim, meas_dim, 0.5, sigma_yaw_CA, MODE_FWD));
-
+        if (use_linear_KF) {
+            models.push_back(std::make_shared<KFTrackers::CVModel>(state_dim, meas_dim, 0.8));
+            models.push_back(std::make_shared<KFTrackers::CAModel>(state_dim, meas_dim, 0.5));
+            models.push_back(std::make_shared<KFTrackers::StationaryModel>(state_dim, meas_dim, 0.05));
+        } else {
+            models.push_back(std::make_shared<EKFTrackers::CVModel>(state_dim, meas_dim, 0.01, sigma_yaw_CA));
+            models.push_back(std::make_shared<EKFTrackers::CAModel>(state_dim, meas_dim, sigma_a_CA, sigma_yaw_CA));
+            models.push_back(std::make_shared<EKFTrackers::CTModel>(state_dim, meas_dim, 0.5, sigma_yaw_CA));
+            models.push_back(std::make_shared<EKFTrackers::StationaryModel>(state_dim, meas_dim, 0.05));
+        }
         // Sync initial state to all models
         for (auto& model : models) {
             model->x = x;
@@ -114,14 +131,26 @@ struct IMMTrack {
     void initializeTPM(int num_modes, double prob_transition_stay) {
         this->trans_prob_mat_ = Eigen::MatrixXd::Zero(num_modes, num_modes);
 
-        double p_stay = prob_transition_stay; 
-        double p_switch = (1.0 - p_stay) / (num_modes - 1); 
+        // double p_stay = prob_transition_stay; 
+        // double p_switch = (1.0 - p_stay) / (num_modes - 1); 
 
-        for (int i = 0; i < num_modes; ++i) {
-            for (int j = 0; j < num_modes; ++j) {
-                this->trans_prob_mat_(i, j) = (i == j) ? p_stay : p_switch;
-            }
-        }
+        // for (int i = 0; i < num_modes; ++i) {
+        //     for (int j = 0; j < num_modes; ++j) {
+        //         this->trans_prob_mat_(i, j) = (i == j) ? p_stay : p_switch;
+        //     }
+        // }
+
+        // this->trans_prob_mat_ << 
+        //     0.70, 0.20, 0.05, 0.05,  // From CV: 20% chance to start accelerating (CA)
+        //     0.15, 0.70, 0.10, 0.05,  // From CA: High chance to stay in CA once it starts!
+        //     0.10, 0.20, 0.60, 0.10,  // From CT: Give it room to stay in CT during the turn
+        //     0.05, 0.15, 0.00, 0.80;  // From STOP: Must go through CA to move
+
+        this->trans_prob_mat_ << 
+            0.80, 0.15, 0.05,  // From CV: 15% chance to enter acceleration/deceleration
+            0.20, 0.60, 0.20,  // From CA: 20% to reach a full stop, 20% to return to steady CV
+            0.10, 0.20, 0.70;  // From STOP: 20% chance to start moving again (via CA)
+
     }
 
     /*
@@ -130,8 +159,8 @@ struct IMMTrack {
     void adaptTPM() {
         
         int num_modes = static_cast<int>(models.size());
-        double n = 0.6;
-        double th = 0.9;
+        double n = 0.9;
+        std::vector<double> th_modes = {0.9, 0.9, 0.9, 0.8};
 
         for (int m1 = 0; m1 < num_modes; m1++) {
             double norm = 0.0;
@@ -151,6 +180,7 @@ struct IMMTrack {
                 this->trans_prob_mat_(m1, m2) /= norm;
             }
             
+            double th = th_modes[m1];
             // Apply lower-bound threshold to the diagonal element
             if (this->trans_prob_mat_(m1, m1) < th) {
                 double old_diag = this->trans_prob_mat_(m1, m1);
@@ -221,20 +251,34 @@ private:
     // --- DynTraj Msgs creation ---       
     Eigen::VectorXd polyfit(const std::vector<double>& t, const std::vector<double>& y, int degree);
     double calculateVariance(const std::vector<double>& t, const std::vector<double>& y, const Eigen::VectorXd& beta, int degree);
-    std::vector<std::pair<double, Eigen::Vector4d>> generatePrediction(const IMMTrack& track);    
+    std::vector<std::pair<double, Eigen::Vector4d>> generatePrediction(const IMMTrack& track);  
+    std::vector<std::pair<double, Eigen::Vector4d>> generatePredictionLinearKF(const IMMTrack& track);
+
     bool checkTrajectoryCollision(
         const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, // Now includes theta in index 3
         const dynus_interfaces::msg::Trajectory& robot_traj,
         double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
         double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
         double base_lon_dist);
+    bool checkTrajectoryCollisionLinearKF(
+        const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, 
+        const dynus_interfaces::msg::Trajectory& robot_traj,
+        double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
+        double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
+        double base_lon_dist);
     void publishPredictions(const std::vector<Measurement> &measurements);    
+
+    void publishUncertaintyMarkers(
+        int track_id,
+        const std::vector<std::pair<double, Eigen::Vector4d>>& trajectory,
+        const std::vector<Eigen::Matrix2d>& covariances);
 
     // ROS Interfaces
     rclcpp::Subscription<vision_msgs::msg::Detection3DArray>::SharedPtr sub_detections_;
     rclcpp::Subscription<dynus_interfaces::msg::Trajectory>::SharedPtr sub_trajectory_;
     rclcpp::Publisher<dynus_interfaces::msg::YieldMode>::SharedPtr pub_yield_mode_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_unc_sphere_;
     rclcpp::Publisher<dynus_interfaces::msg::DynTraj>::SharedPtr pub_predicted_traj_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pred_pos_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pred_vel_pub_;
@@ -278,6 +322,7 @@ private:
     dynus_interfaces::msg::Trajectory trajectory_;
     bool trajectory_initialized_;
     bool use_yield_mode_ = true;
+    bool linear_kf_ = use_linear_KF;
 };
 
 #endif // IMM_OBSTACLE_TRACKER_PREDICTION_NODE_HPP_

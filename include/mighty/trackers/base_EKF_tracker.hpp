@@ -7,13 +7,8 @@
 #include <cmath>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <iostream>
+#include "base_IMM_tracker.hpp"
 
-
-enum Mode {
-    MODE_FWD = 1,
-    MODE_LEFT = 2,
-    MODE_RIGHT = 3
-};
 
 // Helpers
 // Source: https://docs.ros.org/en/jazzy/p/angles/generated/program_listing_file_include_angles_angles.h.html
@@ -27,31 +22,11 @@ static inline double normalize_angle(double angle)
 // ==========================================
 // 1. ABSTRACT BASE MODEL
 // ==========================================
-class BaseEKFModel {
+class BaseEKFModel : public IMMTrackerModel {
 public:
-    int state_dim_;
-    int meas_dim_;
-
-    Eigen::VectorXd x;
-    Eigen::MatrixXd P;
-    Eigen::MatrixXd Q;
-    Eigen::MatrixXd R;
-    Eigen::MatrixXd H;
-    double likelihood;
 
     BaseEKFModel(int state_dim, int meas_dim) 
-        : state_dim_(state_dim), meas_dim_(meas_dim) {
-        x = Eigen::VectorXd::Zero(state_dim_);
-        P = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        Q = Eigen::MatrixXd::Identity(state_dim_, state_dim_);
-        R = Eigen::MatrixXd::Identity(meas_dim_, meas_dim_);
-        H = Eigen::MatrixXd::Zero(meas_dim_, state_dim_);
-        
-        // Standard 3D Position Measurement Matrix
-        H(0, 0) = 1.0; 
-        H(1, 1) = 1.0; 
-        H(2, 2) = 1.0;
-    }
+        : IMMTrackerModel(state_dim, meas_dim) {}
 
     virtual ~BaseEKFModel() = default;
 
@@ -148,6 +123,11 @@ public:
     }
 };
 
+
+namespace EKFTrackers {
+    // ==========================================
+    // 2. DERIVED MODELS
+    // ==========================================
 /*
  * a = 0, θ̇ = 0
  */
@@ -155,13 +135,11 @@ class CVModel : public BaseEKFModel {
 private:
     double var_v_;
     double var_yaw_;
-    Mode mode_;
 public:
-    CVModel(int state_dim, int meas_dim, double sigma_v, double sigma_yaw_rate, Mode mode) 
+    CVModel(int state_dim, int meas_dim, double sigma_v, double sigma_yaw_rate) 
     : BaseEKFModel(state_dim, meas_dim),
       var_v_ (sigma_v * sigma_v),
-      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate),
-      mode_ (mode) {}
+      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate) {}
 
     void setQ(double dt) {
         Q.setZero();
@@ -239,13 +217,11 @@ class CAModel : public BaseEKFModel {
 private:
     double var_a_;
     double var_yaw_;
-    Mode mode_;
 public:
-    CAModel(int state_dim, int meas_dim, double sigma_a, double sigma_yaw_rate, Mode mode) 
+    CAModel(int state_dim, int meas_dim, double sigma_a, double sigma_yaw_rate) 
     : BaseEKFModel(state_dim, meas_dim),
       var_a_ (sigma_a * sigma_a),
-      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate),
-      mode_ (mode) {}
+      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate) {}
 
     void setQ(double dt) {
         Q.setZero();
@@ -332,13 +308,11 @@ class CTModel : public BaseEKFModel {
 private:
     double var_v_;
     double var_yaw_;
-    Mode mode_;
 public:
-    CTModel(int state_dim, int meas_dim, double sigma_a, double sigma_yaw_rate, Mode mode) 
+    CTModel(int state_dim, int meas_dim, double sigma_a, double sigma_yaw_rate) 
     : BaseEKFModel(state_dim, meas_dim),
       var_v_ (sigma_a * sigma_a),
-      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate),
-      mode_ (mode) {}
+      var_yaw_ (sigma_yaw_rate * sigma_yaw_rate) {}
 
     void setQ(double dt) {
         Q.setZero();
@@ -412,3 +386,78 @@ public:
         P = F * P * F.transpose() + Q;
     }
 };
+
+/*
+ * v = 0, a = 0, θ̇ = 0, φ̇ = 0
+ * Strictly stationary target.
+ */
+class StationaryModel : public BaseEKFModel {
+private:
+    double var_pos_;
+public:
+    StationaryModel(int state_dim, int meas_dim, double sigma_pos) 
+    : BaseEKFModel(state_dim, meas_dim),
+      var_pos_ (sigma_pos * sigma_pos) {}
+
+    void setQ(double dt) {
+        Q.setZero();
+
+        // Very small position noise (prevents the filter from locking completely)
+        Q(0,0) = var_pos_;
+        Q(1,1) = var_pos_;
+        Q(2,2) = var_pos_;
+
+        // Dynamic states have effectively zero process noise
+        // because we assume it is strictly stationary
+        Q(3,3) = 1e-6; // v
+        Q(4,4) = 1e-6; // th (heading doesn't change when stopped)
+        Q(5,5) = 1e-6; // ph
+        Q(6,6) = 1e-6; // a
+        Q(7,7) = 1e-6; // th_d
+        Q(8,8) = 1e-6; // ph_d
+    }
+
+    void predict(double dt) override {
+        double px = x(0), py = x(1), pz = x(2);
+        double th = x(4), ph = x(5);
+
+        setQ(dt);
+
+        // 1. Predict Kinematics (Position and orientation stay exactly the same)
+        x(0) = px;
+        x(1) = py;
+        x(2) = pz;
+        x(4) = th; 
+        x(5) = ph; 
+        
+        // Force all dynamic states to zero
+        x(3) = 0.0; // v = 0
+        x(6) = 0.0; // a = 0
+        x(7) = 0.0; // th_d = 0
+        x(8) = 0.0; // ph_d = 0
+
+        // 2. Jacobian Matrix (F)
+        // Since nothing moves, all derivatives of distance wrt velocity/accel are 0
+        double d_dist_dv = 0.0;
+        double d_dist_da = 0.0;      
+        double d_v_da    = 0.0;      
+        double d_a_da    = 0.0;     
+        double dist_step = 0.0;
+
+        Eigen::MatrixXd F = getF(th, ph, d_dist_dv, d_dist_da, d_v_da, d_a_da, dist_step, dt);        
+
+        // Force dynamic state transitions to zero so covariance drops to the Q noise floor
+        F(3, 3) = 0.0; // dv/dv = 0 
+        F(3, 6) = 0.0; // dv/da = 0
+        F(4, 7) = 0.0; // dth/dth_d = 0
+        F(5, 8) = 0.0; // dph/dph_d = 0
+        F(6, 6) = 0.0; // da/da = 0
+        F(7, 7) = 0.0; // dth_d/dth_d = 0
+        F(8, 8) = 0.0; // dph_d/dph_d = 0
+
+        // 3. Update Covariance
+        P = F * P * F.transpose() + Q;
+    }
+};
+
+} // namespace EKFTrackers

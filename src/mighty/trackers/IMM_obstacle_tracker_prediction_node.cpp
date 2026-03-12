@@ -91,6 +91,9 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     pred_vel_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("predicted_velocities", 10);
     pub_yield_mode_ = this->create_publisher<dynus_interfaces::msg::YieldMode>("yield_mode", 10);
 
+    pub_unc_sphere_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("uncertainty_spheres", 10);
+
+
     RCLCPP_INFO(this->get_logger(), " IMM Tracker & Prediction Initialized.");
 }
 
@@ -135,7 +138,7 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
 
     // --- Step 4: Association & Update ---
     std::vector<int> assignments = associateMeasurements(current_measurements, tracks_, cluster_tolerance_);
-    
+
     for (int i = 0; i < static_cast<int>(assignments.size()); i++){
         int match_idx = assignments[i];
         auto& meas = current_measurements[i];
@@ -146,21 +149,46 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
         if (match_idx >= 0) {
             IMMTrack& matched_track = tracks_[match_idx];
 
-            // cold start velocity and heading
+            // cold start
             if (matched_track.is_first_meas) { 
                 matched_track.is_first_meas = false;
 
-                double dx = centroid(0) - matched_track.models[0]->x(0); 
-                double dy = centroid(1) - matched_track.models[0]->x(1);
+                if (!linear_kf_) 
+                {
 
-                double initial_heading = std::atan2(dy, dx);
-                
-                double dt = this->now().seconds() - matched_track.time_last_updated;
-                double initial_velocity = std::sqrt(dx*dx + dy*dy) / dt;
+                    double dx = centroid(0) - matched_track.models[0]->x(0); 
+                    double dy = centroid(1) - matched_track.models[0]->x(1);
 
-                for (int m = 0; m < NUM_MODES; ++m) {
-                    matched_track.models[m]->x(3) = initial_velocity;
-                    matched_track.models[m]->x(4) = initial_heading;
+                    double initial_heading = std::atan2(dy, dx);
+                    
+                    double dt = this->now().seconds() - matched_track.time_last_updated;
+                    double initial_velocity = std::sqrt(dx*dx + dy*dy) / dt;
+
+                    for (int m = 0; m < NUM_MODES; ++m) {
+                        matched_track.models[m]->x(3) = initial_velocity;
+                        matched_track.models[m]->x(4) = initial_heading;
+                    }
+                } else 
+                {
+                    double dx = centroid(0) - matched_track.models[0]->x(0); 
+                    double dy = centroid(1) - matched_track.models[0]->x(1);
+                    double dz = centroid(2) - matched_track.models[0]->x(2);
+                    
+                    // Time delta between first and second measurement
+                    double dt = this->now().seconds() - matched_track.time_last_updated;
+                    
+                    // Pure linear velocity in each axis (no trig needed!)
+                    double vx_init = dx / dt;
+                    double vy_init = dy / dt;
+                    double vz_init = dz / dt;
+
+                    for (int m = 0; m < NUM_MODES; ++m) {
+                        // Update the state vector for all IMM models
+                        // Reminder: State is [x, y, z, vx, vy, vz, ax, ay, az]
+                        matched_track.models[m]->x(3) = vx_init;
+                        matched_track.models[m]->x(4) = vy_init;
+                        matched_track.models[m]->x(5) = vz_init;
+                    }
                 }
             }
             
@@ -173,7 +201,8 @@ void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg
             meas.has_match = true;
             
         } else {
-            
+            RCLCPP_DEBUG(this->get_logger(), "No match for detection at (%.2f, %.2f). Creating new track.", 
+                centroid(0), centroid(1));
             IMMTrack new_track(
                 state_dim_,meas_dim_, this->now().seconds(), 
                 centroid, raw_bbox, track_id_++,
@@ -315,7 +344,7 @@ void IMMObstacleTrackerPredictionNode::deleteOldTracks() {
     
     auto it = tracks_.begin();
     while (it != tracks_.end()) {
-        if ((current_time - it->time_last_updated) > time_to_delete_old_obstacles_) {
+        if ((current_time - it->time_last_updated) > 1.0) {
             it = tracks_.erase(it);
         } else {
             ++it;
@@ -373,9 +402,12 @@ void IMMObstacleTrackerPredictionNode::interaction(
             
             // Calculate difference (spread)
             Eigen::VectorXd diff = track.models[i]->x - x_mixed[j];
-            
-            diff(4) = normalize_angle(diff(4));    // theta
-            diff(5) = normalize_angle(diff(5));    // phi
+
+            if (!linear_kf_)
+            {
+                diff(4) = normalize_angle(diff(4));    // theta
+                diff(5) = normalize_angle(diff(5));    // phi
+            } 
             
             P_mixed[j] += w_ij * (track.models[i]->P + diff * diff.transpose());
         }
@@ -411,6 +443,8 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
         // 2. Retrieve the likelihood calculated by the model
         double likelihood = track.models[m]->likelihood;
         track.likelihoods(m) = likelihood;
+
+        RCLCPP_INFO(this->get_logger(), "Track [%d] Mode %d Likelihood: %.6f", track.id, m, likelihood);
         
         // 3. Mode Probability Update
         double unnormalized_prob = likelihood * track.c_bar(m);
@@ -436,11 +470,9 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
     // Adapt TPM
     track.adaptTPM();
 
-    if (tracker_debug_) {
-        RCLCPP_INFO(this->get_logger(), 
-            "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, CT: %.2f",
-            track.id, track.mode_probs(0), track.mode_probs(1), track.mode_probs(2));
-    }
+    RCLCPP_INFO(this->get_logger(), 
+        "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, STOP: %.2f",
+        track.id, track.mode_probs(0), track.mode_probs(1), track.mode_probs(2));
     
 }
         
@@ -463,8 +495,11 @@ void IMMObstacleTrackerPredictionNode::combine(IMMTrack& track)
     for (int m = 0; m < NUM_MODES; ++m) {
         Eigen::VectorXd diff = track.models[m]->x - track.x;
         
-        diff(4) = normalize_angle(diff(4));      // theta
-        diff(5)   = normalize_angle(diff(5));    // phi
+        if (!linear_kf_)
+        {
+            diff(4) = normalize_angle(diff(4));      // theta
+            diff(5)  = normalize_angle(diff(5));    // phi
+        }
         
         // P += prob * ( P_mode + spread_term )
         track.P += track.mode_probs(m) * (track.models[m]->P + diff * diff.transpose());
@@ -474,13 +509,16 @@ void IMMObstacleTrackerPredictionNode::combine(IMMTrack& track)
 std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode::generatePrediction(
     const IMMTrack& track)
 {
-     std::vector<std::pair<double, Eigen::Vector4d>> trajectory;    
+    std::vector<std::pair<double, Eigen::Vector4d>> trajectory;    
+    std::vector<Eigen::Matrix2d> covariances; 
 
     // --- 1. Set Horizon based on Mode ---
     int num_steps = std::ceil(prediction_horizon_ / prediction_dt_);
 
     // Store previous and current measurement for each mode
     std::array<double, NUM_MODES> x, y, z, v, th, ph, a, th_d, ph_d;
+    std::array<Eigen::Matrix2d, NUM_MODES> P_xy; 
+    std::array<Eigen::Matrix2d, NUM_MODES> Q_xy;
 
     Eigen::VectorXd current_probs = track.mode_probs;
 
@@ -501,14 +539,11 @@ std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode
         double v_ = track.models[m]->x(3);
         double a_ = track.models[m]->x(6);
         
-        if  (v_ > 5.0) v_ = 5.0;
-        if (v_ < -5.0) v_ = -5.0;
-        
-        if  (a_ > 8.0) a_ = 8.0;
-        if (a_ < -8.0) a_ = -8.0;
+        v[m] = std::clamp(v_, -5.0, 5.0);
+        a[m] = std::clamp(a_, -3.0, 3.0);
 
-        v[m]    = v_;
-        a[m]    = a_;
+        P_xy[m] = track.models[m]->P.block<2, 2>(0, 0);
+        Q_xy[m] = track.models[m]->Q.block<2, 2>(0, 0);
     }
 
     // --- 2. Step-by-Step Integration ---
@@ -521,6 +556,8 @@ std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode
         cos_mixed = 0.0;
         sin_mixed = 0.0;
 
+        Eigen::Matrix2d P_mixed = Eigen::Matrix2d::Zero();
+
         for (int m = 0; m < NUM_MODES; m++) {
             // mix
             x_mixed += current_probs(m) * x[m];
@@ -528,7 +565,16 @@ std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode
             z_mixed += current_probs(m) * z[m];
             cos_mixed += current_probs(m) * cos(th[m]);
             sin_mixed += current_probs(m) * sin(th[m]);
-            
+        }
+
+        double th_mixed = std::atan2(sin_mixed, cos_mixed);
+        for (int m = 0; m < NUM_MODES; m++) {
+            P_xy[m] += Q_xy[m] * prediction_dt_;
+
+            Eigen::Vector2d diff = Eigen::Vector2d(x[m], y[m]) - Eigen::Vector2d(x_mixed, y_mixed);
+
+            P_mixed += current_probs(m) * (P_xy[m] + diff * diff.transpose());
+
             // integrate
             double dist = v[m] * prediction_dt_ + 0.5 * a[m] * std::pow(prediction_dt_, 2);
             
@@ -541,19 +587,173 @@ std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode
             
             v[m] += a[m] * prediction_dt_;
 
-            if  (v[m] > 5.0) v[m] = 5.0;
-            if (v[m] < -5.0) v[m] = -5.0;
-            
-            if  (a[m] > 8.0) a[m] = 8.0;
-            if (a[m] < -8.0) a[m] = -8.0;
+            v[m] = std::clamp(v[m], -5.0, 5.0);
+            a[m] = std::clamp(a[m], -3.0, 3.0);
+
         }
-        double th_mixed = std::atan2(sin_mixed, cos_mixed);
         trajectory.push_back({t, Eigen::Vector4d(x_mixed, y_mixed, z_mixed, th_mixed)});
+        covariances.push_back(P_mixed);
 
         current_probs = track.trans_prob_mat_.transpose() * current_probs;
     }
 
+    publishUncertaintyMarkers(track.id, trajectory, covariances);
     return trajectory;
+}
+
+
+std::vector<std::pair<double, Eigen::Vector4d>> IMMObstacleTrackerPredictionNode::generatePredictionLinearKF(
+    const IMMTrack& track)
+{
+    std::vector<std::pair<double, Eigen::Vector4d>> trajectory;    
+    std::vector<Eigen::Matrix2d> covariances; 
+
+    // --- 1. Set Horizon based on Mode ---
+    int num_steps = std::ceil(prediction_horizon_ / prediction_dt_);
+
+    // Store previous and current measurement for each mode
+    std::array<double, NUM_MODES> x, y, z, vx, vy, vz, ax, ay, az;
+    std::array<Eigen::Matrix2d, NUM_MODES> P_xy; 
+    std::array<Eigen::Matrix2d, NUM_MODES> Q_xy;
+
+    Eigen::VectorXd current_probs = track.mode_probs;
+
+    // initialize
+    for (int m = 0; m < NUM_MODES; m++) {
+        x[m]    = track.models[m]->x(0);
+        y[m]    = track.models[m]->x(1);
+        z[m]    = track.models[m]->x(2);
+        vx[m]   = track.models[m]->x(3);
+        vy[m]   = track.models[m]->x(4);
+        vz[m]   = track.models[m]->x(5);
+        ax[m]   = track.models[m]->x(6);
+        ay[m]   = track.models[m]->x(7);
+        az[m]   = track.models[m]->x(8);
+
+        // clamp v and a
+        for (int i = 3; i < 6; i++) {
+            // v
+            track.models[m]->x(i) = std::clamp(track.models[m]->x(i), -5.0, 5.0);
+            
+            // a
+            track.models[m]->x(i + 3) = std::clamp(track.models[m]->x(i + 3), -3.0, 3.0);
+        }
+
+        P_xy[m] = track.models[m]->P.block<2, 2>(0, 0);
+        Q_xy[m] = track.models[m]->Q.block<2, 2>(0, 0);
+    }
+
+    // --- 2. Step-by-Step Integration ---
+    for (int step = 0; step < num_steps; ++step) {
+        double t = step * prediction_dt_;
+        double x_mixed, y_mixed, z_mixed, cos_mixed, sin_mixed;
+        x_mixed = 0.0;
+        y_mixed = 0.0;
+        z_mixed = 0.0;
+
+        Eigen::Matrix2d P_mixed = Eigen::Matrix2d::Zero();
+
+        for (int m = 0; m < NUM_MODES; m++) {
+            // mix
+            x_mixed += current_probs(m) * x[m];
+            y_mixed += current_probs(m) * y[m];
+            z_mixed += current_probs(m) * z[m];
+        }
+
+        for (int m = 0; m < NUM_MODES; m++) {
+            P_xy[m] += Q_xy[m] * prediction_dt_;
+
+            Eigen::Vector2d diff = Eigen::Vector2d(x[m], y[m]) - Eigen::Vector2d(x_mixed, y_mixed);
+
+            P_mixed += current_probs(m) * (P_xy[m] + diff * diff.transpose());
+
+            // integrate            
+            x[m] = x[m] + vx[m] * prediction_dt_ + 0.5 * ax[m] * std::pow(prediction_dt_, 2);
+            y[m] = y[m] + vy[m] * prediction_dt_ + 0.5 * ay[m] * std::pow(prediction_dt_, 2);
+            z[m] = z[m] + vz[m] * prediction_dt_ + 0.5 * az[m] * std::pow(prediction_dt_, 2);
+            
+            vx[m] = vx[m] + ax[m] * prediction_dt_;
+            vy[m] = vy[m] + ay[m] * prediction_dt_;
+            vz[m] = vz[m] + az[m] * prediction_dt_;
+
+            vx[m] = std::clamp(vx[m], -5.0, 5.0);
+            vy[m] = std::clamp(vy[m], -5.0, 5.0);
+            vz[m] = std::clamp(vz[m], -5.0, 5.0);
+        }
+        trajectory.push_back({t, Eigen::Vector4d(x_mixed, y_mixed, z_mixed, -1.0)}); // -1.0 as placeholder for heading since linear KF doesn't model it
+        covariances.push_back(P_mixed);
+
+        current_probs = track.trans_prob_mat_.transpose() * current_probs;
+    }
+
+    publishUncertaintyMarkers(track.id, trajectory, covariances);
+    return trajectory;
+}
+
+void IMMObstacleTrackerPredictionNode::publishUncertaintyMarkers(
+    int track_id,
+    const std::vector<std::pair<double, Eigen::Vector4d>>& trajectory,
+    const std::vector<Eigen::Matrix2d>& covariances)
+{
+    visualization_msgs::msg::MarkerArray marker_array;    
+    int num_steps = trajectory.size();
+
+    for (size_t step = 0; step < num_steps; ++step) {
+        // Extract data
+        const auto& state = trajectory[step].second;
+        double x_mixed = state(0);
+        double y_mixed = state(1);
+        double z_mixed = state(2);
+        Eigen::Matrix2d P_mixed = covariances[step];
+
+        // 1. Solve for eigenvalues and eigenvectors
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigensolver(P_mixed);
+        if (eigensolver.info() != Eigen::Success) continue;
+
+        double lambda1 = eigensolver.eigenvalues()(0); // Minor axis variance
+        double lambda2 = eigensolver.eigenvalues()(1); // Major axis variance
+        Eigen::Vector2d e2 = eigensolver.eigenvectors().col(1); // Major axis vector
+
+        double angle = std::atan2(e2(1), e2(0));
+
+        // 2. Construct the Marker
+        visualization_msgs::msg::Marker ellipse_marker;
+        ellipse_marker.header.frame_id = frame_id_;
+        ellipse_marker.ns = "imm_uncertainty_track_" + std::to_string(track_id);
+        ellipse_marker.id = step;
+        ellipse_marker.type = visualization_msgs::msg::Marker::CYLINDER;
+        ellipse_marker.action = visualization_msgs::msg::Marker::ADD;
+
+        ellipse_marker.pose.position.x = x_mixed;
+        ellipse_marker.pose.position.y = y_mixed;
+        ellipse_marker.pose.position.z = z_mixed; 
+
+        tf2::Quaternion q;
+        q.setRPY(0, 0, angle);
+        ellipse_marker.pose.orientation.x = q.x();
+        ellipse_marker.pose.orientation.y = q.y();
+        ellipse_marker.pose.orientation.z = q.z();
+        ellipse_marker.pose.orientation.w = q.w();
+
+        // 3. Scale based on Chi-Square distribution (5.991 for 95% confidence in 2D)
+        const double chi2_95 = 5.991; 
+        ellipse_marker.scale.x = 2.0 * std::sqrt(lambda2 * chi2_95); // Major axis length
+        ellipse_marker.scale.y = 2.0 * std::sqrt(lambda1 * chi2_95); // Minor axis length
+        ellipse_marker.scale.z = 0.05; // Flat disc
+
+        // 4. Color and fade out over the horizon
+        ellipse_marker.color.r = 0.0;
+        ellipse_marker.color.g = 0.5;
+        ellipse_marker.color.b = 1.0;
+        ellipse_marker.color.a = 0.5 * (1.0 - (static_cast<double>(step) / num_steps)); 
+
+        ellipse_marker.lifetime = rclcpp::Duration::from_seconds(0.1); 
+
+        marker_array.markers.push_back(ellipse_marker);
+    }
+
+    // Assuming you have a publisher named marker_pub_ initialized in your node
+    pub_unc_sphere_->publish(marker_array);
 }
 
 // =================================================================================
@@ -619,6 +819,77 @@ bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollision(
     return false;
 }
 
+bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollisionLinearKF(
+    const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, 
+    const dynus_interfaces::msg::Trajectory& robot_traj,
+    double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
+    double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
+    double base_lon_dist)
+{
+    if (ped_traj.empty() || robot_traj.goals.empty()) return false;
+
+    double robot_dt = robot_traj.dt;
+    double ped_dt = prediction_dt_;
+
+    // Dynamically size the lateral threshold based on IMM confidence.
+    // If CV prob is 1.0 (walking straight), lateral threshold is tight (base_lat_dist).
+    // If CV prob is 0.0 (turning/chaotic/stopped), lateral expands to match longitudinal (a circle).
+    double dynamic_lat_dist = (cv_mode_prob * base_lat_dist) + ((1.0 - cv_mode_prob) * base_lon_dist);
+
+    for (size_t i = 0; i < robot_traj.goals.size(); ++i) {
+        double current_t = i * robot_dt;
+        size_t ped_idx = static_cast<size_t>(current_t / ped_dt);
+
+        if (ped_idx >= ped_traj.size() - 1) break;
+
+        // Interpolate position AND velocity (Linear in Cartesian!)
+        double t0 = ped_traj[ped_idx].first;
+        double t1 = ped_traj[ped_idx + 1].first;
+        double ratio = (current_t - t0) / (t1 - t0);
+        
+        Eigen::Vector4d p0 = ped_traj[ped_idx].second;
+        Eigen::Vector4d p1 = ped_traj[ped_idx + 1].second;
+        Eigen::Vector4d ped_state = p0 + ratio * (p1 - p0); 
+        
+        // Robot position
+        double rx = robot_traj.goals[i].p.x;
+        double ry = robot_traj.goals[i].p.y;
+
+        // 1. Find the relative position vector
+        double dx = rx - ped_state(0);
+        double dy = ry - ped_state(1);
+
+        // 2. Derive heading from Cartesian velocities
+        double vx = ped_state(2);
+        double vy = ped_state(3);
+        double speed_sq = vx * vx + vy * vy;
+        
+        double theta = 0.0;
+        // Only calculate heading if the pedestrian is actually moving.
+        // If they are stationary, dynamic_lat_dist will expand to base_lon_dist (a circle),
+        // so the orientation angle mathematically won't matter anyway!
+        if (speed_sq > 0.001) { 
+            theta = std::atan2(vy, vx);
+        }
+
+        // 3. Rotate the relative position into the pedestrian's local frame
+        // This splits the distance into Along-Track (longitudinal) and Cross-Track (lateral)
+        double dx_local =  dx * std::cos(theta) + dy * std::sin(theta);
+        double dy_local = -dx * std::sin(theta) + dy * std::cos(theta);
+
+        // 4. Elliptical Collision Check
+        // Equation of an ellipse: (x/a)^2 + (y/b)^2 <= 1
+        double lon_check = std::pow(dx_local / base_lon_dist, 2);
+        double lat_check = std::pow(dy_local / dynamic_lat_dist, 2);
+
+        if ((lon_check + lat_check) <= 1.0) {
+            return true; // Imminent collision detected!
+        }
+    }
+
+    return false;
+}
+
 void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Measurement> &measurements)
 {
     
@@ -644,18 +915,37 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
 
         // if (fabs(track.x(6)) <= acceleration_threshold_) continue;
 
-        std::vector<std::pair<double, Eigen::Vector4d>> predicted_trajectory = generatePrediction(track);
+        std::vector<std::pair<double, Eigen::Vector4d>> predicted_trajectory;
+        if (linear_kf_) {
+            predicted_trajectory = generatePredictionLinearKF(track);
+        } else {
+             predicted_trajectory = generatePrediction(track);
+        }
 
-        if (use_yield_mode_ && trajectory_initialized_) {
+        if (use_yield_mode_ && trajectory_initialized_ && !trajectory_.goals.empty()) {
             double base_lon_dist = 1.0; // [m]
             double base_lat_dist = 0.4; // [m]
 
-            bool collision = checkTrajectoryCollision(
-                predicted_trajectory,
-                trajectory_,
-                track.mode_probs(0), // CV mode probability as a proxy for confidence in straight walking
-                base_lat_dist,      // base lateral distance (e.g., shoulder width)
-                base_lon_dist);    // base longitudinal distance (e.g., average step length)
+            bool collision;
+            
+            if (!linear_kf_) {
+                collision = checkTrajectoryCollision(
+                    predicted_trajectory,
+                    trajectory_,
+                    track.mode_probs(0), // CV mode probability as a proxy for confidence in straight walking
+                    base_lat_dist,      // base lateral distance (e.g., shoulder width)
+                    base_lon_dist);    // base longitudinal distance (e.g., average step length)
+
+            } else 
+            {
+                collision = checkTrajectoryCollisionLinearKF(
+                    predicted_trajectory,
+                    trajectory_,
+                    track.mode_probs(0), // CV mode probability as a proxy for confidence in straight walking
+                    base_lat_dist,      // base lateral distance (e.g., shoulder width)
+                    base_lon_dist);    // base longitudinal distance (e.g., average step length)
+
+            }
 
             double d_ev_to_ped = std::sqrt(
                     std::pow(track.x(0) - trajectory_.goals.front().p.x, 2) + 
