@@ -323,6 +323,24 @@ private:
     bool trajectory_initialized_;
     bool use_yield_mode_ = true;
     bool linear_kf_ = use_linear_KF;
+
+    double d_08_4_;                   // precomputed d_08^4 for yield mode reduction
+    double max_considered_distance_;  // beyond this distance, no yield mode reduction is applied
+
+    inline double yield_mode_reduction(double d_min) {
+        // Clamp at boundaries for safety
+        if (d_min >= max_considered_distance_) return 1.0;
+        if (d_min <= 0.0) return 0.0;
+
+        // Calculate k dynamically so f(d_08) always equals exactly 0.2
+        // ln(0.8) = -0.223143551314
+        const double k = -0.223143551314 / d_08_4_; 
+
+        // Fast calculation of d_min^4
+        const double d_min_sq = d_min * d_min;
+
+        return 1.0 - std::exp(k * d_min_sq * d_min_sq);
+    }
 };
 
 #endif // IMM_OBSTACLE_TRACKER_PREDICTION_NODE_HPP_

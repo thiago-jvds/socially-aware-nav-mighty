@@ -54,6 +54,10 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     this->declare_parameter("velocity_threshold", 0.0);
     this->declare_parameter("acceleration_threshold", 0.1);
     this->declare_parameter("tracker_debug", false);
+    
+    // Yield mode parameters
+    this->declare_parameter("d_08", 3.0);   // distance at which to reduce 80% of speed          
+    this->declare_parameter("max_considered_distance", 10.0); // beyond this distance, no reduction is applied
 
     // IMM Tuning Parameters
     this->declare_parameter("prob_transition_stay", 0.85);   // High probability to stay in current mode
@@ -74,6 +78,13 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     acceleration_threshold_ = this->get_parameter("acceleration_threshold").as_double();
     prob_transition_stay_ = this->get_parameter("prob_transition_stay").as_double();
     tracker_debug_ = this->get_parameter("tracker_debug").as_bool();
+
+    double d_08 = this->get_parameter("d_08").as_double();
+    max_considered_distance_ = this->get_parameter("max_considered_distance").as_double();
+
+    double d_08_sq = d_08 * d_08; 
+    d_08_4_ = d_08_sq * d_08_sq; // precompute for efficiency
+
 
     // 2. Pub/Sub
     sub_detections_ = this->create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -1117,7 +1128,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
             RCLCPP_WARN(this->get_logger(), "Minimum distance to robot in yield mode: %.2f meters", d_min);
         }
         dynus_interfaces::msg::YieldMode yield_msg;
-        yield_msg.d_min = d_min;
+        yield_msg.alpha = yield_mode_reduction(d_min);
         pub_yield_mode_->publish(yield_msg);
     }
 
