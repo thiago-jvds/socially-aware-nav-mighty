@@ -32,6 +32,12 @@ def generate_launch_description():
     use_ground_robot_arg = DeclareLaunchArgument(
         'use_ground_robot', default_value='false', description='Use ground robot (affects RViz config)'
     )
+    use_hunav_sim_arg = DeclareLaunchArgument(
+        'use_hunav_sim', default_value='false', description='Flag to enable or disable hunav sim components (loader, world gen, manager)'
+    )
+    use_ped_obstacles_arg = DeclareLaunchArgument(
+        'use_ped_obstacles', default_value='false', description='Flag to enable or disable pedestrian obstacles'
+    )
 
     # benchmark name
     benchmark_name_arg = DeclareLaunchArgument('benchmark_name', default_value='benchmark_name', description='Benchmark name')
@@ -69,6 +75,7 @@ def generate_launch_description():
             'hard_forest': 'hard_forest.world',
             'dynamic_forest': 'dynamic_forest.world',
             'empty_corridor': 'empty_corridor.world',
+            'T_junction': 'T_junction.world',
         }
 
         # Choose the world file based on the provided environment.
@@ -79,6 +86,8 @@ def generate_launch_description():
         use_dyn_obs = convert_str_to_bool(LaunchConfiguration('use_dyn_obs').perform(context))
         use_gazebo_gui = LaunchConfiguration('use_gazebo_gui').perform(context)
         use_ground_robot = convert_str_to_bool(LaunchConfiguration('use_ground_robot').perform(context))
+        use_hunav_sim = convert_str_to_bool(LaunchConfiguration('use_hunav_sim').perform(context))
+        use_ped_obstacles = convert_str_to_bool(LaunchConfiguration('use_ped_obstacles').perform(context))
 
         # Create a rviz node - use ground robot config if available, otherwise use default
         rviz_config_filename = 'mighty_sim_ground_robot.rviz' if use_ground_robot else 'mighty.rviz'
@@ -136,20 +145,95 @@ def generate_launch_description():
                     PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles_pedestrians.launch.py'])
                 ),
                 launch_arguments={
-                    "num_obstacles": "20",
-                    "mode": "FULL",
-                    "urdf_xacro": "human_box.urdf.xacro",
-                    "spawn_interval": "1.0",
-                    "use_sim_time": 'true',
-                    "seed": '31',
+                    "num_obstacles": "25",
+                    # "urdf_xacro": "human_box.urdf.xacro",
+                    # "spawn_interval": "1.0",
+                    # "use_sim_time": 'true',
+                    "env_value": env_value,
+                    "seed": '25',
                 }.items()
             )
+
+        to_launch = []
+        if use_hunav_sim:
+            from launch.actions import TimerAction
+            robot_name = 'NX01'
+
+            assert env_value in ['empty_corridor'], "Hunav sim only works with a few environments."
+            
+            # 1. Load the agents YAML
+            agents_yaml_path = os.path.join(get_package_share_directory('hunav_gazebo_wrapper'), 'scenarios', 'simple_agents.yaml')
+            hunav_loader_node = Node(
+                package='hunav_agent_manager',
+                executable='hunav_loader',
+                name='hunav_loader',
+                output='screen',
+                parameters=[agents_yaml_path]
+            )
+
+            generated_world_path = PathJoinSubstitution([
+                FindPackageShare('mighty'), 'worlds', 'generatedWorld.world'
+            ])
+
+            # 2. Generate the dynamic world
+            hunav_gazebo_worldgen_node = Node(
+                        package='hunav_gazebo_wrapper',
+                        executable='hunav_gazebo_world_generator',
+                        name='hunav_gazebo_world_generator',
+                        output='screen',
+                        parameters=[{
+                            'base_world': world_path,
+                            'agents_file': agents_yaml_path,         
+                            'generated_world_path': generated_world_path, 
+                            'use_gazebo_obs': True,
+                            'update_rate': 1000.0,
+                            'robot_name': robot_name, 
+                            'global_frame_to_publish': 'map',
+                            'use_navgoal_to_start': False,
+                            'ignore_models': 'ground_plane',
+                            'use_collision': True,
+                        }]
+                    )
+            # 3. The manager that calculates the social forces
+            hunav_manager_node = Node(
+                package='hunav_agent_manager',
+                executable='hunav_agent_manager',
+                name='hunav_agent_manager',
+                output='screen',
+                parameters=[{
+                    'robot_name': robot_name,
+                }],
+            )
+
+
+            gazebo_launch = TimerAction(
+                period=3.0, # Wait 3 seconds for world generator to finish
+                actions=[
+                    IncludeLaunchDescription(
+                        PythonLaunchDescriptionSource(
+                            PathJoinSubstitution([FindPackageShare('gazebo_ros'), 'launch', 'gazebo.launch.py'])
+                        ),
+                        launch_arguments={'world': generated_world_path, 'use_sim_time': 'false', 'gui': use_gazebo_gui, 'enable_gpu': 'true'}.items()
+                    )
+                ]
+            )
+
+            static_tf_bridge = Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name='static_tf_bridge',
+                arguments=['0', '0', '0', '0', '0', '0', 'NX01', 'NX01/base_link']
+            )
+
+            to_launch.extend([static_tf_bridge, hunav_loader_node, hunav_gazebo_worldgen_node, hunav_manager_node])
+
 
         # Return launch description
         nodes_to_start = [gazebo_launch]
         nodes_to_start.append(rviz_node) if use_rviz else None
         # nodes_to_start.append(dynamic_obstacles_launch) if use_dyn_obs else None
-        nodes_to_start.append(peds_obstacles_launch) 
+        nodes_to_start.append(peds_obstacles_launch) if use_ped_obstacles else None
+        nodes_to_start.extend(to_launch) if use_hunav_sim else None
 
         return nodes_to_start
 
@@ -159,6 +243,8 @@ def generate_launch_description():
         use_gazebo_gui_arg,
         use_dyn_obs_arg,
         use_ground_robot_arg,
+        use_hunav_sim_arg,
+        use_ped_obstacles_arg,
         benchmark_name_arg,
         OpaqueFunction(function=launch_setup)
     ])

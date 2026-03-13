@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot name="human_box" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:arg name="namespace" default="human_0" />
+  <xacro:arg name="robot_name" default="human_0" />
   <xacro:arg name="traj_x" default="0.0" />
   <xacro:arg name="traj_y" default="0.0" />
   <xacro:arg name="traj_z" default="0.0" />
@@ -46,19 +46,4 @@
     </plugin>
   </gazebo>
 
-  <gazebo>
-    <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
-      <ros>
-        <namespace>$(arg namespace)</namespace>
-        <remapping>odom:=ground_truth</remapping>
-      </ros>
-      <body_name>base_link</body_name>
-      <frame_name>map</frame_name>
-      <update_rate>30.0</update_rate>
-      <xyz_offset>0 0 0</xyz_offset>
-      <rpy_offset>0 0 0</rpy_offset>
-      <gaussian_noise>0.0</gaussian_noise>
-    </plugin>
-  </gazebo>
-
- </robot>
+</robot>

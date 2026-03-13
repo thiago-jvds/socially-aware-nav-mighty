@@ -141,23 +141,27 @@ fi
     return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
 
 
-def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
+from typing import List
+def generate_gazebo_yaml(setup_bash: Path, goal: List[tuple], sim_env: str,
                          env: str = 'hard_forest',
                          start_pos: tuple = (0, 0, 3.0), start_yaw: float = 1.57,
                          ros_domain_id: int = 7, use_rviz: bool = True,
-                         use_gazebo_gui: bool = False, use_ground_robot: bool = False) -> str:
+                         use_gazebo_gui: bool = False, use_ground_robot: bool = False,
+                         use_hunav_sim: bool = False, use_ped_obstacles: bool = False) -> str:
     """Generate YAML for single-agent Gazebo simulation."""
-    goal_x, goal_y, goal_z = goal
     start_x, start_y, start_z = start_pos
 
+    assert not (use_hunav_sim and use_ped_obstacles), "Cannot use both hunav_sim and ped_obstacles simultaneously in this launch. Please choose one or the other."
     panes = [
         # Base station with Gazebo
         {
             'shell_command': [
                 'source /usr/share/gazebo/setup.bash',
+                'source ~/code/hunav_ws/install/setup.bash',
                 f'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=true '
                 f'use_gazebo_gui:={str(use_gazebo_gui).lower()} use_rviz:={str(use_rviz).lower()} '
-                f'env:={env} use_ground_robot:={str(use_ground_robot).lower()}'
+                f'env:={env} use_ground_robot:={str(use_ground_robot).lower()} '
+                f'use_hunav_sim:={str(use_hunav_sim).lower()} use_ped_obstacles:={str(use_ped_obstacles).lower()}'
             ]
         },
         # Ground robot odom-to-state converter (only for ground robot)
@@ -171,9 +175,9 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
         # Onboard agent NX01
         {
             'shell_command': [
-                'sleep 10',
+                'sleep 20',
                 f'ros2 launch mighty onboard_mighty.launch.py x:={start_x} y:={start_y} z:={start_z} yaw:={start_yaw} '
-                f'sim_env:={sim_env} use_ground_robot:={str(use_ground_robot).lower()}'
+                f'sim_env:={sim_env} use_ground_robot:={str(use_ground_robot).lower()} use_hunav_sim:={str(use_hunav_sim).lower()}'
             ]
         },
         # ACL mapper
@@ -188,7 +192,7 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
         {
             'shell_command': [
                 'sleep 20',
-                f"ros2 launch mighty goal_sender.launch.py list_agents:=\"['NX01']\" list_goals:=\"['[{goal_x}, {goal_y}, {goal_z}]']\""
+                f"ros2 launch mighty goal_monitor.launch.py goal_tolerance:=5.0 goal_points:=\"{list(goal)}\""
             ]
         }
     ]
@@ -237,11 +241,11 @@ def main():
 
     parser.add_argument(
         '--goal', '-g',
+        action='append',
         type=float,
         nargs=3,
         metavar=('X', 'Y', 'Z'),
-        default=[105.0, 0.0, 3.0],
-        help='Goal position for gazebo mode (default: 105.0 0.0 3.0)'
+        help='List of goal positions. Can be specified multiple times (e.g., -g 1 2 3 -g 4 5 6)'
     )
 
     parser.add_argument(
@@ -319,7 +323,25 @@ def main():
         help='Print the generated YAML without launching'
     )
 
+    parser.add_argument(
+        '--use-hunav-sim',
+        action='store_true',
+        help='Include HUNAV sim components (loader, world gen, manager) in the launch'
+    )
+
+    parser.add_argument(
+        '--use-ped-obstacles',
+        action='store_true',
+        help='Include pedestrian obstacles in the Gazebo simulation'
+    )
+
     args = parser.parse_args()
+
+
+    # Handle the default value after parsing
+    if args.goal is None:
+        args.goal = [[105.0, 0.0, 3.0]]
+
 
     # Find setup.bash path
     setup_bash = find_setup_bash(args.setup_bash)
@@ -344,13 +366,14 @@ def main():
             'easy_forest': 'easy_forest',
             'hard_forest': 'hard_forest',
             'empty_corridor': 'empty_corridor',
+            'T_junction': 'T_junction',
         }
         world_name = env_to_world_mapping.get(args.env, args.env)
 
         # Adjust start position z for ground robot (ground level vs flying)
         start_pos = list(args.start)
         if use_ground_robot and start_pos[2] == 3.0:  # Only adjust if using default z
-            start_pos[2] = 0.0  # Ground robot base_link at z=0 (wheels at ground)
+            start_pos[2] = 0.4  # Ground robot base_link at z=0 (wheels at ground)
         start_pos = tuple(start_pos)
 
         yaml_content = generate_gazebo_yaml(
@@ -363,14 +386,16 @@ def main():
             ros_domain_id=args.ros_domain_id,
             use_rviz=use_rviz,
             use_gazebo_gui=args.gazebo_gui,
-            use_ground_robot=use_ground_robot
+            use_ground_robot=use_ground_robot,
+            use_hunav_sim=args.use_hunav_sim,
+            use_ped_obstacles=args.use_ped_obstacles,
         )
         print(f"[INFO] Mode: Single-agent Gazebo simulation (sim_env={sim_env})")
         print(f"[INFO] Environment: {args.env} (world: {world_name})")
         if use_ground_robot:
             print(f"[INFO] Vehicle: Ground robot (Pioneer 3-AT)")
         print(f"[INFO] Start: ({start_pos[0]}, {start_pos[1]}, {start_pos[2]})")
-        print(f"[INFO] Goal: ({args.goal[0]}, {args.goal[1]}, {args.goal[2]})")
+        print(f"[INFO] Goals: {args.goal}")
 
     if args.dry_run:
         print("\n[DRY RUN] Generated YAML:")

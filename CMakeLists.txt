@@ -167,6 +167,19 @@ ament_target_dependencies(dynamic_forest_node
   dynus_interfaces
 )
 
+# For dynamic pedestrian node
+add_executable(dynamic_pedestrian_node src/sim/dynamic_pedestrian_node.cpp)
+ament_target_dependencies(dynamic_pedestrian_node
+  rclcpp
+  geometry_msgs
+  gazebo_msgs
+  visualization_msgs
+  std_msgs
+  tf2_ros
+  dynus_interfaces
+  nav_msgs
+)
+
 # install for launch and config files
 install(DIRECTORY
 launch
@@ -189,6 +202,7 @@ install(TARGETS
   convert_vicon_to_state
   convert_velodyne_to_ros_time
   dynamic_forest_node
+  dynamic_pedestrian_node
   CA_obstacle_tracker_prediction_node
   IMM_obstacle_tracker_prediction_node
   fake_sim_perception_node

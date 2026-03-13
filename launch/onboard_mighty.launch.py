@@ -47,6 +47,8 @@ def generate_launch_description():
         description='Override use_frame_alignment (empty = use config default)')
     use_IMM_and_vicon_arg = DeclareLaunchArgument('use_IMM_and_vicon', default_value='false',
         description='Use IMM tracker and Vicon for Dynamic Obj detection')
+    use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false', description='Use simulation time')
+    use_hunav_sim_arg = DeclareLaunchArgument('use_hunav_sim', default_value='false', description='Use HuNavSim instead of Gazebo for simulation')
 
     # Need to be the same as simulartor.launch.py
     map_size_x_arg = DeclareLaunchArgument('map_size_x', default_value='20.0')
@@ -84,6 +86,8 @@ def generate_launch_description():
         map_frame_id_override = LaunchConfiguration('map_frame_id').perform(context)
         use_frame_alignment_str = LaunchConfiguration('use_frame_alignment').perform(context)
         use_IMM_and_vicon = convert_str_to_bool(LaunchConfiguration('use_IMM_and_vicon').perform(context))
+        use_sim_time = convert_str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
+        use_hunav_sim = convert_str_to_bool(LaunchConfiguration('use_hunav_sim').perform(context))
 
         # The path to the urdf file - select based on robot type
         urdf_filename = 'p3at.urdf.xacro' if use_ground_robot else 'quadrotor.urdf.xacro'
@@ -134,6 +138,7 @@ def generate_launch_description():
 
         # Lidar topic remapping for hardware vs simulation
         lidar_point_cloud_topic = 'livox/lidar' if use_hardware else 'mid360_PointCloud2'
+        parameters["use_sim_time"] = use_sim_time
 
         # Create a Dynus node
         mighty_node = Node(
@@ -159,7 +164,7 @@ def generate_launch_description():
             namespace=namespace,
             parameters=[{
                 'robot_description': ParameterValue(Command(['xacro ', urdf_path, ' namespace:=', namespace, ' d435_range_max_depth:=', str(parameters['depth_camera_depth_max'])]), value_type=str),
-                'use_sim_time': False,
+                'use_sim_time': use_sim_time,
                 'frame_prefix': namespace + '/',
             }],
             arguments=['--ros-args', '--log-level', 'error']
@@ -174,7 +179,7 @@ def generate_launch_description():
             name='spawn_entity',
             namespace=namespace,
             parameters=[{
-                'use_sim_time': False,
+                'use_sim_time': use_sim_time,
             }],
             arguments=['-topic', 'robot_description', '-entity', namespace, '-x', x, '-y', y, '-z', z, '-Y', yaw, '--ros-args', '--log-level', 'error'],
         )
@@ -245,6 +250,8 @@ def generate_launch_description():
                     parameters=[{"start_pos": [float(x), float(y), float(z)],
                                  "start_yaw": float(yaw),
                                  "send_state_to_gazebo": parameters['sim_env'] == 'gazebo',
+                                 "use_hunav_sim": use_hunav_sim,
+                                 "use_sim_time": False,
                                  "publish_tf": True,
                                  "publish_state": True,
                                  "use_ground_robot": use_ground_robot,
@@ -379,5 +386,7 @@ def generate_launch_description():
         map_frame_id_arg,
         use_frame_alignment_arg,
         use_IMM_and_vicon_arg,
+        use_sim_time_arg, 
+        use_hunav_sim_arg,
         OpaqueFunction(function=launch_setup)
     ])

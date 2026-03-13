@@ -52,6 +52,7 @@ public:
         this->declare_parameter<std::vector<double>>("start_pos", {0.0, 0.0, 4.0});
         this->declare_parameter<double>("start_yaw", -1.57);
         this->declare_parameter<bool>("send_state_to_gazebo", true);
+        this->declare_parameter<bool>("use_hunav_sim", false);
         this->declare_parameter<double>("default_goal_z", 0.3);
         this->declare_parameter<int>("visual_level", 0);
 
@@ -74,6 +75,7 @@ public:
         auto start_pos = this->get_parameter("start_pos").as_double_array();
         double yaw = this->get_parameter("start_yaw").as_double();
         send_state_to_gazebo_ = this->get_parameter("send_state_to_gazebo").as_bool();
+        use_hunav_sim_ = this->get_parameter("use_hunav_sim").as_bool();
         default_goal_z_ = this->get_parameter("default_goal_z").as_double();
         int visual_level = this->get_parameter("visual_level").as_int();
 
@@ -146,6 +148,13 @@ public:
         pub_marker_drone_ = this->create_publisher<visualization_msgs::msg::Marker>(
             "drone_marker", rclcpp::QoS(10).reliable().durability_volatile());
 
+        if (use_hunav_sim_)
+        {
+            pub_gazebo_state_ = this->create_publisher<gazebo_msgs::msg::EntityState>(
+                "/gazebo/set_entity_state", rclcpp::QoS(10).reliable().durability_volatile());
+            gz_client_ = this->create_client<gazebo_msgs::srv::SetEntityState>("/gazebo/set_entity_state");
+        }
+
         // Optional odometry publisher
         if (publish_odom_)
         {
@@ -213,15 +222,18 @@ private:
     rclcpp::Publisher<dynus_interfaces::msg::State>::SharedPtr pub_state_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_marker_drone_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
+    rclcpp::Publisher<gazebo_msgs::msg::EntityState>::SharedPtr pub_gazebo_state_;
 
     rclcpp::Subscription<dynus_interfaces::msg::Goal>::SharedPtr sub_goal_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
     rclcpp::Client<gazebo_msgs::srv::SetEntityState>::SharedPtr gazebo_client_;
+    rclcpp::Client<gazebo_msgs::srv::SetEntityState>::SharedPtr gz_client_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     dynus_interfaces::msg::State state_;
     bool publish_marker_drone_{false};
     bool send_state_to_gazebo_{true};
+    bool use_hunav_sim_{false};
 
     std::shared_ptr<tf2_ros::Buffer> tf2_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf2_listener_;
@@ -449,7 +461,40 @@ private:
         // Send the state to Gazebo
         if (send_state_to_gazebo_)
         {
-            std::thread(&FakeSim::sendGazeboState, this).detach();
+            if (use_hunav_sim_) 
+            {
+                gazebo_msgs::msg::EntityState gazebo_msg;
+                gazebo_msg.name = ns_;
+                gazebo_msg.pose.position.x = state_.pos.x;
+                gazebo_msg.pose.position.y = state_.pos.y;
+                gazebo_msg.pose.position.z = state_.pos.z;
+                gazebo_msg.pose.orientation = state_.quat;
+                
+                pub_gazebo_state_->publish(gazebo_msg);
+
+                // if (!gz_client_->service_is_ready())
+                // {
+                //     return;
+                // }
+
+                // auto request = std::make_shared<gazebo_msgs::srv::SetEntityState::Request>();
+                // request->state.name = ns_;
+
+                // request->state.pose.position.x = state_.pos.x;
+                // request->state.pose.position.y = state_.pos.y;
+                // request->state.pose.position.z = state_.pos.z;
+                // request->state.pose.orientation.x = state_.quat.x;
+                // request->state.pose.orientation.y = state_.quat.y;
+                // request->state.pose.orientation.z = state_.quat.z;
+                // request->state.pose.orientation.w = state_.quat.w;
+
+                // // Pure async call - no blocking, no detached threads needed
+                // gz_client_->async_send_request(request);
+
+            } else 
+            {
+                std::thread(&FakeSim::sendGazeboState, this).detach();
+            }
         }
 
         // Publish the state (disabled for ground robots - convert_odom_to_state publishes actual state)
