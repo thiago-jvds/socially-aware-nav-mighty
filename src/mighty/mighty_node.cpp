@@ -874,6 +874,7 @@ void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
     double roll, pitch, yaw;
     quaternion2Euler(msg->quat, roll, pitch, yaw);
     current_state.setYaw(yaw);
+    current_state.t = this->now().seconds();
     mighty_ptr_->updateState(current_state);
 
     // publish the state
