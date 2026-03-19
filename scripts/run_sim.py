@@ -367,6 +367,7 @@ def main():
             'hard_forest': 'hard_forest',
             'empty_corridor': 'empty_corridor',
             'T_junction': 'T_junction',
+            'corridor_overtake': 'corridor_overtake'
         }
         world_name = env_to_world_mapping.get(args.env, args.env)
 

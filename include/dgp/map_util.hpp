@@ -157,6 +157,21 @@ namespace mighty
       return (idx >= 0 && idx < (int)heat_.size()) ? heat_[idx] : 0.0f;
     }
 
+    bool checkDynamicCollision(const Vec3f &pos, double time) const
+    {
+      
+      if (x < 0 || x >= dim_(0) ||
+          y < 0 || y >= dim_(1) || 
+          z < 0 || z >= dim_(2))
+        return false;
+
+      if (active_K_ == 0 || active_J_ == 0 || t_samples_buf_.empty())
+        return false;
+
+      const int idx = x + y * dim_(0) + z * dim_xy_;
+
+    }
+
     // Get heat cloud for visualization
     vec_Vecf<3> getHeatCloud(float threshold = 0.01f) const;
     std::vector<float> getHeatValues() const { return heat_; }
@@ -1137,6 +1152,18 @@ namespace mighty
                            const vec_Vecf<3> &obst_bbox,
                            double traj_max_time);
     void computeStaticHeat();
+
+    std::vector<float> t_samples_buf_;
+    std::vector<Eigen::Vector3f> ck_list_;
+    std::vector<Eigen::Vector3f> hk_list_;
+    std::vector<float> Rreach_list_;
+    std::vector<float> Rj_buf_;
+    std::vector<float> Wj_buf_;
+    std::vector<Eigen::Vector3f> cj_flat_;
+
+    // Track the active sizes for the current map update
+    size_t active_K_ = 0; // Number of dynamic obstacles
+    size_t active_J_ = 0; // Number of time samples
   };
 
   // Template specialization for 3D MapUtil heat methods
@@ -1223,17 +1250,18 @@ namespace mighty
     std::vector<float> t_samples;
     if (!dyn_pred_times_.empty())
     {
-      t_samples = dyn_pred_times_;
+      t_samples_buf_ = dyn_pred_times_;
     }
     else
     {
       const int M = std::max(2, heat_num_samples_);
-      t_samples.resize(M);
+      t_samples_buf_.resize(M);
       for (int j = 0; j < M; ++j)
-        t_samples[j] = (float)j * Th / (float)(M - 1);
+        t_samples_buf_[j] = (float)j * Th / (float)(M - 1);
     }
 
     const size_t K = obst_pos.size();
+    active_K_ = K;
     if (K == 0)
       return;
 
@@ -1260,14 +1288,14 @@ namespace mighty
     };
 
     // Precompute obstacle centers, bbox half-extents, and reachable radii
-    std::vector<Eigen::Vector3f> ck_list(K);
-    std::vector<Eigen::Vector3f> hk_list(K);
-    std::vector<float> Rreach_list(K);
+    ck_list_.resize(K);
+    hk_list_.resize(K);
+    Rreach_list_.resize(K);
 
     const float R0 = std::max(0.0f, dyn_base_inflation_m_);
     for (size_t k = 0; k < K; ++k)
     {
-      ck_list[k] = obst_pos[k].cast<float>();
+      ck_list_[k] = obst_pos[k].cast<float>();
 
       // Get bbox half-extents for this obstacle
       float hx = 0.4f, hy = 0.4f, hz = 0.4f;
@@ -1277,33 +1305,35 @@ namespace mighty
         hy = obst_bbox[k].y();
         hz = obst_bbox[k].z();
       }
-      hk_list[k] = Eigen::Vector3f(hx, hy, hz);
+      hk_list_[k] = Eigen::Vector3f(hx, hy, hz);
 
       // Reachable radius: bbox extent + motion
       const float max_extent = std::max({hx, hy, hz});
-      Rreach_list[k] = max_extent + (float)obst_max_vel_ * Th;
+      Rreach_list_[k] = max_extent + (float)obst_max_vel_ * Th;
     }
 
     // Precompute per-time-sample tube radii and time-decay weights
-    const size_t J = t_samples.size();
-    std::vector<float> Rj(J), Wj(J);
+    const size_t J = t_samples_buf_.size();
+    active_J_ = J;
+    Rj_buf_.resize(J);
+    Wj_buf_.resize(J);
     for (size_t j = 0; j < J; ++j)
     {
-      const float tj = std::max(0.0f, t_samples[j]);
-      Rj[j] = R0 + heat_gamma_ * tj;
-      Wj[j] = std::exp(-tj / tau_w);
+      const float tj = std::max(0.0f, t_samples_buf_[j]);
+      Rj_buf_[j] = R0 + heat_gamma_ * tj;
+      Wj_buf_[j] = std::exp(-tj / tau_w);
     }
 
     // Precompute predicted centers (fallback to ck if unavailable)
-    std::vector<Eigen::Vector3f> cj_flat(K * J);
+    cj_flat_.resize(K * J);
     for (size_t k = 0; k < K; ++k)
     {
       for (size_t j = 0; j < J; ++j)
       {
-        Eigen::Vector3f cj = ck_list[k];
+        Eigen::Vector3f cj = ck_list_[k];
         if (k < dyn_pred_samples_.size() && j < dyn_pred_samples_[k].size())
           cj = dyn_pred_samples_[k][j].cast<float>();
-        cj_flat[k * J + j] = cj;
+        cj_flat_[k * J + j] = cj;
       }
     }
 
@@ -1332,11 +1362,11 @@ namespace mighty
       {
         // Base reachable radius (finite horizon)
         float Hbase = 0.0f;
-        const float Rreach = Rreach_list[k];
+        const float Rreach = Rreach_list_[k];
         if (Rreach > 1e-6f)
         {
-          const Eigen::Vector3f &ck = ck_list[k];
-          const Eigen::Vector3f &hk = hk_list[k];
+          const Eigen::Vector3f &ck = ck_list_[k];
+          const Eigen::Vector3f &hk = hk_list_[k];
 
           // Compute distance from point to box
           const float dx_abs = std::abs(xw - ck.x());
@@ -1360,12 +1390,12 @@ namespace mighty
 
         // Tube bonus (max over time)
         float tube_max = 0.0f;
-        const Eigen::Vector3f *cj_ptr = &cj_flat[k * J];
-        const Eigen::Vector3f &hk = hk_list[k];
+        const Eigen::Vector3f *cj_ptr = &cj_flat_[k * J];
+        const Eigen::Vector3f &hk = hk_list_[k];
 
         for (size_t j = 0; j < J; ++j)
         {
-          const float R = Rj[j];
+          const float R = Rj_buf_[j];
           if (R <= 1e-6f)
             continue;
 
@@ -1389,7 +1419,7 @@ namespace mighty
           const float d = std::sqrt(std::max(0.0f, d2));
           const float u = std::min(1.0f, std::max(0.0f, d / R));
           const float g = pow_fast(1.0f - u, heat_q_);
-          tube_max = std::max(tube_max, Wj[j] * g);
+          tube_max = std::max(tube_max, Wj_buf_[j] * g);
         }
 
         float Hk = Hbase + heat_alpha1_ * tube_max;

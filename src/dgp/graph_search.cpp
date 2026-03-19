@@ -874,6 +874,90 @@ void GraphSearch::getSucc(const StatePtr &curr, std::vector<int> &succ_ids, std:
   }
 }
 
+void GraphSearch::getSuccWTime(const StatePtr &curr, std::vector<int> &succ_ids, std::vector<double> &succ_costs)
+{
+  succ_ids.clear();
+  succ_costs.clear();
+
+  // --- Build a forward reference once per node ---
+  // Prefer start_vel_ when available; if it's anti-aligned with goal, flip it.
+  Eigen::Vector2d vref(start_vel_(0), start_vel_(1));
+  if (vref.squaredNorm() < 1e-9)
+  {
+    vref = Eigen::Vector2d(goal_(0) - start_(0), goal_(1) - start_(1));
+  }
+  else
+  {
+    Eigen::Vector2d vg(goal_(0) - start_(0), goal_(1) - start_(1));
+    if (vg.squaredNorm() > 1e-9 && vref.dot(vg) < 0.0)
+      vref = -vref; // never bias away from goal
+  }
+  const double vref_n = vref.norm();
+
+  for (const auto &d : ns_)
+  {
+    int new_x = curr->x + d[0];
+    int new_y = curr->y + d[1];
+    int new_z = curr->z + d[2];
+
+    if (isOccupied(new_x, new_y, new_z))
+      continue;
+
+    Eigen::Vector3d pf(new_x, new_y, new_z);
+    Eigen::Vector3d p0(curr->x, curr->y, curr->z);
+    Eigen::Vector3d v0 = vref;
+
+    if (map_util_)
+    {
+      double node_time = computeNodeTime(pf, p0, v0, curr);
+  
+      double total_time = current_time_ + node_time;
+  
+      if (map_util_->checkDynamicCollision(pf, total_time))
+      {
+        continue;
+      }
+    }
+
+    int new_id = coordToId(new_x, new_y, new_z);
+    if (new_id < 0 || new_id >= (int)hm_.size())
+      continue;
+
+    if (!seen_[new_id])
+    {
+      seen_[new_id] = true;
+      hm_[new_id] = std::make_shared<State>(new_id, new_x, new_y, new_z, d[0], d[1], d[2]);
+      if (new_id < 0 || new_id >= (int)hm_.size())
+      {
+        fprintf(stderr, "[BUG] Creation failed id=%d\n", new_id);
+        std::abort();
+      }
+      hm_[new_id]->h = getHeur(new_x, new_y, new_z);
+    }
+
+    // Base geometric step cost (1, √2, √3)
+    const double base = std::sqrt(double(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
+    double step_cost = base;
+    
+    // -------- Dynamic heat-map cost (soft) --------
+    // Static obstacles remain hard-blocked by isOccupied() above.
+    // Heat is time-invariant and precomputed in map_util_ during readMap().
+    if (use_heat_ && map_util_)
+    {
+      const float w_heat = map_util_->getHeatWeight();
+      if (w_heat > 0.0f)
+      {
+        const float h = map_util_->getHeat(new_x, new_y, new_z);
+        step_cost += (double)(w_heat * h);
+      }
+    }
+
+    succ_ids.push_back(new_id);
+    succ_costs.push_back(step_cost);
+
+  }
+}
+
 void GraphSearch::getJpsSucc(const StatePtr &curr, std::vector<int> &succ_ids, std::vector<double> &succ_costs)
 {
 

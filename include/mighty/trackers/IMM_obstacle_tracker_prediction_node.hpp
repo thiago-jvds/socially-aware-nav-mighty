@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <dynus_interfaces/msg/dyn_traj.hpp>
+#include <dynus_interfaces/msg/state.hpp>
 #include <dynus_interfaces/msg/trajectory.hpp>
 #include <dynus_interfaces/msg/yield_mode.hpp>
 #include <mighty/mighty_type.hpp>
@@ -221,6 +222,7 @@ private:
     // Callbacks
     void detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg);
     void trajectoryCallback(const dynus_interfaces::msg::Trajectory::SharedPtr msg);
+    void stateCallback(const dynus_interfaces::msg::State::SharedPtr msg);
 
     // 1. Interaction (Mixing Step)
     void interaction(IMMTrack& track, 
@@ -263,9 +265,8 @@ private:
     bool checkTrajectoryCollisionLinearKF(
         const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, 
         const dynus_interfaces::msg::Trajectory& robot_traj,
-        double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
-        double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
-        double base_lon_dist);
+        double cv_mode_prob,
+        double stop_mode_prob);
     void publishPredictions(const std::vector<Measurement> &measurements);    
 
     void publishUncertaintyMarkers(
@@ -274,12 +275,17 @@ private:
         const std::vector<Eigen::Matrix2d>& covariances);
 
     // ROS Interfaces
+
+    // Subscribers
     rclcpp::Subscription<vision_msgs::msg::Detection3DArray>::SharedPtr sub_detections_;
     rclcpp::Subscription<dynus_interfaces::msg::Trajectory>::SharedPtr sub_trajectory_;
+    rclcpp::Subscription<dynus_interfaces::msg::State>::SharedPtr sub_state_;
+
+    // Publishers
     rclcpp::Publisher<dynus_interfaces::msg::YieldMode>::SharedPtr pub_yield_mode_;
+    rclcpp::Publisher<dynus_interfaces::msg::DynTraj>::SharedPtr pub_predicted_traj_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_unc_sphere_;
-    rclcpp::Publisher<dynus_interfaces::msg::DynTraj>::SharedPtr pub_predicted_traj_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pred_pos_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pred_vel_pub_;
 
@@ -321,6 +327,10 @@ private:
     // Yield Mode params
     dynus_interfaces::msg::Trajectory trajectory_;
     bool trajectory_initialized_;
+    dynus_interfaces::msg::State current_state_;
+    bool state_initialized_;
+    double d_immediate_max_;    // distance threshold to enter yield mode
+    double d_personal_max_;    // distance threshold for personal space
     bool use_yield_mode_ = true;
     bool linear_kf_ = use_linear_KF;
 

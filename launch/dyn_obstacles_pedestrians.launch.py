@@ -124,11 +124,13 @@ def generate_human_entities(context):
 
         traj_mode = "STATIC"
 
+        z = FIXED_Z_HEIGHT
+        speed = round(random.uniform(HUMAN_SPEED_RANGE[0], HUMAN_SPEED_RANGE[1]), 2)
+
         # 1. Generate Parameters Based on Environment
         if env_value == "empty_corridor":
             # Split pedestrians into 3 groups: +X, -X, and +Y (cross-traffic)
             group = i % 3
-
             if group == 0:
                 # Move +X
                 traj_x_min = 2.5
@@ -171,10 +173,10 @@ def generate_human_entities(context):
 
             else:
                 # Move +Y (Cross-Traffic bouncing between walls)
-                traj_x_max = 95.0
+                traj_x_max = 150.0
                 traj_x_min = 5.0
-                traj_y_min = -5.0
-                traj_y_max = 5.0
+                traj_y_min = -7.0
+                traj_y_max = 7.0
 
                 x = round(random.uniform(traj_x_min, traj_x_max), 2)
                 y = round(random.uniform(traj_y_min, traj_y_max), 2)
@@ -215,13 +217,33 @@ def generate_human_entities(context):
                 y = round(random.uniform(-40.0, 0.0), 2)
                 traj_mode = "ONE_WAY_Y"
 
+        elif env_value == "corridor_overtake":
+            group = i % 2
+            if group == 0:
+                # Move +X
+                traj_x_max = 200.0
+                traj_x_min = -5.0
+
+                x = round(random.uniform(traj_x_min, traj_x_max), 2)
+                y = round(0.0, 2)
+
+                traj_mode = "OVERTAKE"
+                speed = 1.0
+
+            elif group == 1:
+                # Move -X
+                traj_x_max = 200.0
+                traj_x_min = -5.0
+
+                x = round(random.uniform(traj_x_min, traj_x_max), 2)
+                y = round(-2.0, 2)
+                traj_mode = "ONE_WAY_X"
+
+                speed = 1.8
         else:
             x = round(random.uniform(SPAWN_AREA["x_min"], SPAWN_AREA["x_max"]), 2)
             y = round(random.uniform(SPAWN_AREA["y_min"], SPAWN_AREA["y_max"]), 2)
             traj_mode = "STATIC"
-
-        z = FIXED_Z_HEIGHT
-        speed = round(random.uniform(HUMAN_SPEED_RANGE[0], HUMAN_SPEED_RANGE[1]), 2)
 
         traj_x_str, traj_y_str, traj_z_str = get_human_trajectory(
             traj_mode,
@@ -362,7 +384,7 @@ def generate_launch_description():
                 "prediction_horizon": 3.0,
             }
         ],
-        # arguments=["--ros-args", "--log-level", "debug"],
+        # arguments=["--ros-args", "--log-level", "info"],
         # prefix="xterm -e gdb -q -ex run --args",  # gdb debugging
     )
     ld.add_action(tracker_node)

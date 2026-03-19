@@ -59,6 +59,9 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     this->declare_parameter("d_08", 3.0);   // distance at which to reduce 80% of speed          
     this->declare_parameter("max_considered_distance", 10.0); // beyond this distance, no reduction is applied
 
+    this->declare_parameter("d_immediate_max", 5.0);    // distance threshold to enter yield mode
+    this->declare_parameter("d_personal_max", 10.0);    // distance threshold for personal space
+
     // IMM Tuning Parameters
     this->declare_parameter("prob_transition_stay", 0.85);   // High probability to stay in current mode
 
@@ -85,6 +88,9 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     double d_08_sq = d_08 * d_08; 
     d_08_4_ = d_08_sq * d_08_sq; // precompute for efficiency
 
+    d_immediate_max_ = this->get_parameter("d_immediate_max").as_double();
+    d_personal_max_ = this->get_parameter("d_personal_max").as_double();
+
 
     // 2. Pub/Sub
     sub_detections_ = this->create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -94,6 +100,10 @@ IMMObstacleTrackerPredictionNode::IMMObstacleTrackerPredictionNode()
     sub_trajectory_ = this->create_subscription<dynus_interfaces::msg::Trajectory>(
         "trajectory", 10,
         std::bind(&IMMObstacleTrackerPredictionNode::trajectoryCallback, this, std::placeholders::_1));
+
+    sub_state_ = this->create_subscription<dynus_interfaces::msg::State>(
+        "state", 10,
+        std::bind(&IMMObstacleTrackerPredictionNode::stateCallback, this, std::placeholders::_1));
 
     pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("tracked_obstacles", 10);
     pub_predicted_traj_ = this->create_publisher<dynus_interfaces::msg::DynTraj>("predicted_trajs", 10);
@@ -112,6 +122,12 @@ void IMMObstacleTrackerPredictionNode::trajectoryCallback(const dynus_interfaces
 {
     trajectory_ = *msg;
     trajectory_initialized_ = true;
+}
+
+void IMMObstacleTrackerPredictionNode::stateCallback(const dynus_interfaces::msg::State::SharedPtr msg)
+{
+    current_state_ = *msg;
+    state_initialized_ = true;
 }
 
 void IMMObstacleTrackerPredictionNode::detectionsCallback(const vision_msgs::msg::Detection3DArray::SharedPtr msg)
@@ -455,7 +471,7 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
         double likelihood = track.models[m]->likelihood;
         track.likelihoods(m) = likelihood;
 
-        RCLCPP_INFO(this->get_logger(), "Track [%d] Mode %d Likelihood: %.6f", track.id, m, likelihood);
+        // RCLCPP_INFO(this->get_logger(), "Track [%d] Mode %d Likelihood: %.6f", track.id, m, likelihood);
         
         // 3. Mode Probability Update
         double unnormalized_prob = likelihood * track.c_bar(m);
@@ -481,9 +497,9 @@ void IMMObstacleTrackerPredictionNode::update(IMMTrack &track,
     // Adapt TPM
     track.adaptTPM();
 
-    RCLCPP_INFO(this->get_logger(), 
-        "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, STOP: %.2f",
-        track.id, track.mode_probs(0), track.mode_probs(1), track.mode_probs(2));
+    // RCLCPP_INFO(this->get_logger(), 
+    //     "Track [%d] Probabilities -> CV: %.2f, CA: %.2f, STOP: %.2f",
+    //     track.id, track.mode_probs(0), track.mode_probs(1), track.mode_probs(2));
     
 }
         
@@ -833,72 +849,67 @@ bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollision(
 bool IMMObstacleTrackerPredictionNode::checkTrajectoryCollisionLinearKF(
     const std::vector<std::pair<double, Eigen::Vector4d>>& ped_traj, 
     const dynus_interfaces::msg::Trajectory& robot_traj,
-    double cv_mode_prob,     // Pass the IMM's confidence in the straight-walking model
-    double base_lat_dist,    // E.g., 0.4 meters (shoulder width)
-    double base_lon_dist)
+    double cv_mode_prob,
+    double stop_mode_prob)     // Pass the IMM's confidence in the straight-walking model
 {
-    if (ped_traj.empty() || robot_traj.goals.empty()) return false;
 
-    double robot_dt = robot_traj.dt;
-    double ped_dt = prediction_dt_;
+    // Edge case: empty trajectories
+    if (ped_traj.empty() || robot_traj.goals.empty()) {
+        return false;
+    }
 
-    // Dynamically size the lateral threshold based on IMM confidence.
-    // If CV prob is 1.0 (walking straight), lateral threshold is tight (base_lat_dist).
-    // If CV prob is 0.0 (turning/chaotic/stopped), lateral expands to match longitudinal (a circle).
-    double dynamic_lat_dist = (cv_mode_prob * base_lat_dist) + ((1.0 - cv_mode_prob) * base_lon_dist);
+    if (stop_mode_prob > 0.5) 
+    {
+        return false;
+    }
 
+    double robot_dt = robot_traj.dt; // Should be 0.01
+    double ped_dt = prediction_dt_;;
+
+    // Evaluate collision at every step of the robot's plan
     for (size_t i = 0; i < robot_traj.goals.size(); ++i) {
         double current_t = i * robot_dt;
+
+        // Find the corresponding indices in the pedestrian trajectory
         size_t ped_idx = static_cast<size_t>(current_t / ped_dt);
 
-        if (ped_idx >= ped_traj.size() - 1) break;
-
-        // Interpolate position AND velocity (Linear in Cartesian!)
-        double t0 = ped_traj[ped_idx].first;
-        double t1 = ped_traj[ped_idx + 1].first;
-        double ratio = (current_t - t0) / (t1 - t0);
-        
-        Eigen::Vector4d p0 = ped_traj[ped_idx].second;
-        Eigen::Vector4d p1 = ped_traj[ped_idx + 1].second;
-        Eigen::Vector4d ped_state = p0 + ratio * (p1 - p0); 
-        
-        // Robot position
-        double rx = robot_traj.goals[i].p.x;
-        double ry = robot_traj.goals[i].p.y;
-
-        // 1. Find the relative position vector
-        double dx = rx - ped_state(0);
-        double dy = ry - ped_state(1);
-
-        // 2. Derive heading from Cartesian velocities
-        double vx = ped_state(2);
-        double vy = ped_state(3);
-        double speed_sq = vx * vx + vy * vy;
-        
-        double theta = 0.0;
-        // Only calculate heading if the pedestrian is actually moving.
-        // If they are stationary, dynamic_lat_dist will expand to base_lon_dist (a circle),
-        // so the orientation angle mathematically won't matter anyway!
-        if (speed_sq > 0.001) { 
-            theta = std::atan2(vy, vx);
+        // If the robot's plan extends beyond our pedestrian prediction horizon, 
+        // we stop checking (or you could assume the pedestrian stays at their last position)
+        if (ped_idx >= ped_traj.size() - 1) {
+            break; 
         }
 
-        // 3. Rotate the relative position into the pedestrian's local frame
-        // This splits the distance into Along-Track (longitudinal) and Cross-Track (lateral)
-        double dx_local =  dx * std::cos(theta) + dy * std::sin(theta);
-        double dy_local = -dx * std::sin(theta) + dy * std::cos(theta);
+        // --- Linear Interpolation of Pedestrian Position ---
+        double t0 = ped_traj[ped_idx].first;
+        double t1 = ped_traj[ped_idx + 1].first;
+        
+        Eigen::Vector3d p0 = ped_traj[ped_idx].second.head<3>(); // Extract (x, y, z) from the trajectory point
+        Eigen::Vector3d p1 = ped_traj[ped_idx + 1].second.head<3>();
 
-        // 4. Elliptical Collision Check
-        // Equation of an ellipse: (x/a)^2 + (y/b)^2 <= 1
-        double lon_check = std::pow(dx_local / base_lon_dist, 2);
-        double lat_check = std::pow(dy_local / dynamic_lat_dist, 2);
+        // How far along are we between t0 and t1? (Values 0.0 to 1.0)
+        double interpolation_ratio = (current_t - t0) / (t1 - t0);
+        
+        Eigen::Vector3d ped_pos_at_t = p0 + interpolation_ratio * (p1 - p0);
 
-        if ((lon_check + lat_check) <= 1.0) {
+        // --- Fetch Robot Position ---
+        Eigen::Vector3d robot_pos_at_t(
+            robot_traj.goals[i].p.x, 
+            robot_traj.goals[i].p.y, 
+            robot_traj.goals[i].p.z
+        );
+
+        // --- Distance Calculation ---
+        double distance;
+        distance = (ped_pos_at_t.head<2>() - robot_pos_at_t.head<2>()).norm();
+
+        // --- Collision Check ---
+        const double collision_threshold = 1.0;
+        if (distance <= collision_threshold) {
             return true; // Imminent collision detected!
         }
     }
 
-    return false;
+    return false; // Path is clear
 }
 
 void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Measurement> &measurements)
@@ -922,18 +933,15 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         int best_mode = 0;
         track.mode_probs.maxCoeff(&best_mode);
 
-        // if (fabs(track.x(3)) <= velocity_threshold_) continue;
-
-        // if (fabs(track.x(6)) <= acceleration_threshold_) continue;
-
         std::vector<std::pair<double, Eigen::Vector4d>> predicted_trajectory;
         if (linear_kf_) {
             predicted_trajectory = generatePredictionLinearKF(track);
         } else {
              predicted_trajectory = generatePrediction(track);
         }
+        double d_EV_to_ped = D_INF;
 
-        if (use_yield_mode_ && trajectory_initialized_ && !trajectory_.goals.empty()) {
+        if (use_yield_mode_ && trajectory_initialized_ && !trajectory_.goals.empty() && state_initialized_) {
             double base_lon_dist = 1.0; // [m]
             double base_lat_dist = 0.4; // [m]
 
@@ -952,32 +960,34 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
                 collision = checkTrajectoryCollisionLinearKF(
                     predicted_trajectory,
                     trajectory_,
-                    track.mode_probs(0), // CV mode probability as a proxy for confidence in straight walking
-                    base_lat_dist,      // base lateral distance (e.g., shoulder width)
-                    base_lon_dist);    // base longitudinal distance (e.g., average step length)
-
+                    track.mode_probs(0),    // CV mode probability as a proxy for confidence in straight walking
+                    track.mode_probs(2));    // STOP mode prob
             }
 
-            double d_ev_to_ped = std::sqrt(
-                    std::pow(track.x(0) - trajectory_.goals.front().p.x, 2) + 
-                    std::pow(track.x(1) - trajectory_.goals.front().p.y, 2)
-                );
+            d_EV_to_ped = std::sqrt(
+                std::pow(track.x(0) - current_state_.pos.x, 2) + 
+                std::pow(track.x(1) - current_state_.pos.y, 2)
+            );
+
 
             if (collision) {
-                RCLCPP_WARN(this->get_logger(), "Collision detected for track [%d] with current robot plan!", track.id);
+                RCLCPP_WARN(this->get_logger(), "Collision in Immediate space detected for track [%d] with current robot plan!", track.id);
                 
-                if (d_ev_to_ped < d_min) {
-                    d_min = d_ev_to_ped;
+                if (d_EV_to_ped < d_min) {
+                    d_min = d_EV_to_ped;
                 }
             }
         }
-
+        int count = 0;
         for (const auto& pt : predicted_trajectory) {
             t_values.push_back(pt.first);
             x_values.push_back(pt.second(0));
             y_values.push_back(pt.second(1));
             z_values.push_back(pt.second(2));
+            count++;
+            if (count == (int)(prediction_horizon_ / prediction_dt_)) break;
         }
+        double end = 0.1 * (double)count;
 
         // --- Helper Lambda to generate markers for ANY trajectory ---
         auto add_trajectory_markers = [&](const std::vector<std::pair<double, Eigen::Vector4d>>& traj, 
@@ -1036,7 +1046,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         double y_diff = abs(y_values.front() - y_values.back());
         double z_diff = abs(z_values.front() - z_values.back());
 
-        double cutoff_length_threshold = 0.1; // TODO: make this a parameter?
+        double cutoff_length_threshold = 0.0; // TODO: make this a parameter?
 
         // If the predicted trajectory is too short, skip the polynomial fitting
         if (x_diff < cutoff_length_threshold && y_diff < cutoff_length_threshold && z_diff < cutoff_length_threshold)
@@ -1062,7 +1072,7 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         PieceWisePol pwp;
         double current_time = this->now().seconds();
         pwp.times.push_back(current_time);
-        pwp.times.push_back(current_time + prediction_horizon_);
+        pwp.times.push_back(current_time + end); // Assuming uniform time intervals in the predicted trajectory
         pwp.coeff_x.push_back({beta_x(0), beta_x(1), beta_x(2), beta_x(3)});
         pwp.coeff_y.push_back({beta_y(0), beta_y(1), beta_y(2), beta_y(3)});
         pwp.coeff_z.push_back({beta_z(0), beta_z(1), beta_z(2), beta_z(3)});
@@ -1077,6 +1087,9 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
         msg.header.stamp = this->now();
         msg.header.frame_id = frame_id_;
         msg.id = track.id;
+        msg.pos.x = track.x(0);
+        msg.pos.y = track.x(1);
+        msg.pos.z = track.x(2);
         msg.bbox.push_back(track.bbox.x());
         msg.bbox.push_back(track.bbox.y());
         msg.bbox.push_back(track.bbox.z());
@@ -1110,10 +1123,15 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
 
         // Set the start and end times for the trajectory
         msg.poly_start_time = current_time;
-        msg.poly_end_time = current_time + prediction_horizon_;
+        msg.poly_end_time = current_time + end;
 
         msg.is_agent = false;
-        // pub_predicted_traj_->publish(msg);
+        
+        // d_immediate_max_ <= d_EV_to_ped <= d_personal_max_
+        if (d_EV_to_ped != D_INF && d_EV_to_ped >= d_immediate_max_ && d_EV_to_ped <= d_personal_max_)
+        {
+        }
+        pub_predicted_traj_->publish(msg);
 
         // Clear the vectors for the next EKF state
         t_values.clear();
@@ -1128,7 +1146,9 @@ void IMMObstacleTrackerPredictionNode::publishPredictions(const std::vector<Meas
             RCLCPP_WARN(this->get_logger(), "Minimum distance to robot in yield mode: %.2f meters", d_min);
         }
         dynus_interfaces::msg::YieldMode yield_msg;
-        yield_msg.alpha = yield_mode_reduction(d_min);
+        // yield_msg.alpha = yield_mode_reduction(d_min);
+        yield_msg.alpha = 1.0;
+
         pub_yield_mode_->publish(yield_msg);
     }
 

@@ -234,7 +234,7 @@ def generate_launch_description():
                 'map_frame_id': map_frame_id,
                 'control_rate': 50.0,
             }],
-            output='screen',
+            output='log',
             emulate_tty=True,
         )
 
@@ -320,6 +320,9 @@ def generate_launch_description():
             parameters=[parameters],
             output='screen',
             emulate_tty=True,
+            arguments=['--ros-args', '--log-level', 'info'],
+            # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
+
         )
 
         bag_perception_node = Node(

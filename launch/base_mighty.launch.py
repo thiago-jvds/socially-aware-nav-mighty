@@ -76,6 +76,7 @@ def generate_launch_description():
             'dynamic_forest': 'dynamic_forest.world',
             'empty_corridor': 'empty_corridor.world',
             'T_junction': 'T_junction.world',
+            'corridor_overtake': 'corridor_overtake.world'
         }
 
         # Choose the world file based on the provided environment.

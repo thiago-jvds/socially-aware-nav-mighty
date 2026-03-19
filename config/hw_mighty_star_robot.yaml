@@ -82,9 +82,9 @@ mighty_node:
         dyn_constr_tilt_weight: 0.0                 # [-] Weight of the tilt constraints violation in the optimization
         dyn_constr_thrust_weight: 0.0               # [-] Weight of the thrust constraints violation in the optimization
         num_dyn_obst_samples: 10                    # [-] Number of samples for the dynamic obstacles in the optimization
-        planner_Co: 0.6 #0.2                        # [-] Collision clearance thresh for static obstacles in the optimization
+        planner_Co: 0.3 #0.2                        # [-] Collision clearance thresh for static obstacles in the optimization
         planner_Cw: 3.0                             # [-] Collision clearance thresh for dynamic obstacles in the optimization
-        drone_bbox: [1.0, 1.0, 0.5]                 # [m] Size of the bounding box for the obstacles
+        drone_bbox: [0.4, 0.4, 0.5]                 # [m] Size of the bounding box for the obstacles
         goal_radius: 0.2                           # [m] Radius of the goal
         goal_seen_radius: 1.0                       # [m] Radius of the goal that the drone can see and stop replanning. Note that if this number is too small, the trajectory planning becomes extremely difficult.
         integral_resolution: 8
@@ -121,7 +121,7 @@ mighty_node:
 
         # Yaw-related parameters
         alpha_filter_dyaw: 0.1                 # [-] Filter parameter for dyaw, \in [0,1]. Higher--> More aggressive filtering
-        w_max: 2.0                              # [rd/s] Maximum angular velocity. ~4.0 for Hardware
+        w_max: 1.0                              # [rd/s] Maximum angular velocity. ~4.0 for Hardware
         yaw_spinning_threshold: 10000              # [-] if the planner keeps failing more than this number, we switch to the spinning mode
         yaw_spinning_dyaw: 1.0                  # [rd/s] Spinning dyaw
 
@@ -231,8 +231,8 @@ mighty_node:
         trajectory_downsample_points: 500  # [-] Number of points to downsample trajectory to (~10x denser than 50)
 
         # Ground robot planning parameters
-        ground_robot_L_min: 1.0       # [m] Lookahead distance for point A (planning start point)
-        ground_robot_v_max: 2.0       # [m/s] Maximum linear velocity for ground robot
+        ground_robot_L_min: 3.0       # [m] Lookahead distance for point A (planning start point)
+        ground_robot_v_max: 3.0       # [m/s] Maximum linear velocity for ground robot
         ground_robot_w_max: 3.0       # [rad/s] Maximum angular velocity for smooth tracking
 
         # Pure pursuit controller parameters (for vehicle_type: "ground_robot")
