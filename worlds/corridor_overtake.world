@@ -75,29 +75,30 @@
         <kinematic>0</kinematic>
       </link>
     </model>
-    
     <model name='corridor_walls'>
       <static>1</static>
       
-      <link name='main_wall_positive'>
-        <pose>22.45 4.1 0.0 0 0 0</pose> 
-        <collision name='collision'>
+      <link name='wall_positive'>
+        <pose>0 3.0 0.0 0 0 0</pose> <collision name='collision'>
           <geometry>
             <box>
-              <size>94.9 2.0 4.0</size> 
-            </box>
+              <size>400 2.0 4.0</size> </box>
           </geometry>
           <max_contacts>10</max_contacts>
           <surface>
-            <contact><ode/></contact>
+            <contact>
+              <ode/>
+            </contact>
             <bounce/>
-            <friction><ode/></friction>
+            <friction>
+              <ode/>
+            </friction>
           </surface>
         </collision>
         <visual name='visual'>
           <geometry>
             <box>
-              <size>94.9 2.0 4.0</size>
+              <size>400 2.0 4.0</size>
             </box>
           </geometry>
           <material>
@@ -109,25 +110,28 @@
         </visual>
       </link>
 
-      <link name='main_wall_negative'>
-        <pose>22.45 -4.1 0.0 0 0 0</pose> 
-        <collision name='collision'>
+      <link name='wall_negative'>
+        <pose>0 -4.0 0.0 0 0 0</pose> <collision name='collision'>
           <geometry>
             <box>
-              <size>94.9 2.0 4.0</size>
+              <size>400 1.0 4.0</size>
             </box>
           </geometry>
           <max_contacts>10</max_contacts>
           <surface>
-            <contact><ode/></contact>
+            <contact>
+              <ode/>
+            </contact>
             <bounce/>
-            <friction><ode/></friction>
+            <friction>
+              <ode/>
+            </friction>
           </surface>
         </collision>
         <visual name='visual'>
           <geometry>
             <box>
-              <size>94.9 2.0 4.0</size>
+              <size>400 1.0 4.0</size>
             </box>
           </geometry>
           <material>
@@ -138,99 +142,7 @@
           </material>
         </visual>
       </link>
-
-      <link name='cross_wall_back'>
-        <pose>79.1 0 0.0 0 0 0</pose> 
-        <collision name='collision'>
-          <geometry>
-            <box>
-              <size>2.0 100.0 4.0</size>
-            </box>
-          </geometry>
-          <max_contacts>10</max_contacts>
-          <surface>
-            <contact><ode/></contact>
-            <bounce/>
-            <friction><ode/></friction>
-          </surface>
-        </collision>
-        <visual name='visual'>
-          <geometry>
-            <box>
-              <size>2.0 100.0 4.0</size>
-            </box>
-          </geometry>
-          <material>
-            <script>
-              <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Bricks</name>
-            </script>
-          </material>
-        </visual>
-      </link>
-
-      <link name='cross_wall_front_positive'>
-        <pose>70.9 27.55 0.0 0 0 0</pose> 
-        <collision name='collision'>
-          <geometry>
-            <box>
-              <size>2.0 44.9 4.0</size>
-            </box>
-          </geometry>
-          <max_contacts>10</max_contacts>
-          <surface>
-            <contact><ode/></contact>
-            <bounce/>
-            <friction><ode/></friction>
-          </surface>
-        </collision>
-        <visual name='visual'>
-          <geometry>
-            <box>
-              <size>2.0 44.9 4.0</size>
-            </box>
-          </geometry>
-          <material>
-            <script>
-              <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Bricks</name>
-            </script>
-          </material>
-        </visual>
-      </link>
-
-      <link name='cross_wall_front_negative'>
-        <pose>70.9 -27.55 0.0 0 0 0</pose> 
-        <collision name='collision'>
-          <geometry>
-            <box>
-              <size>2.0 44.9 4.0</size>
-            </box>
-          </geometry>
-          <max_contacts>10</max_contacts>
-          <surface>
-            <contact><ode/></contact>
-            <bounce/>
-            <friction><ode/></friction>
-          </surface>
-        </collision>
-        <visual name='visual'>
-          <geometry>
-            <box>
-              <size>2.0 44.9 4.0</size>
-            </box>
-          </geometry>
-          <material>
-            <script>
-              <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Bricks</name>
-            </script>
-          </material>
-        </visual>
-      </link>
-      
     </model>
-    
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type='adiabatic'/>
