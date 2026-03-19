@@ -2379,7 +2379,7 @@ void MIGHTY_NODE::publishDynamicHeatCloud()
     return;
 
   // -------- Tunables --------
-  const int stride = 2;             // 1 = every voxel, 2 = every 2 voxels, etc.
+  const int stride = 1;             // 1 = every voxel, 2 = every 2 voxels, etc.
   const float heat_min = 0.05f;     // only publish voxels with heat >= this
   const size_t max_points = 200000; // hard cap for safety
   // --------------------------
