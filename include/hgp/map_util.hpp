@@ -55,6 +55,7 @@ class MapUtil {
       : map_(other.map_),
         heat_(other.heat_),
         dynamic_heat_enabled_(other.dynamic_heat_enabled_),
+        use_social_dynamic_heat_(other.use_social_dynamic_heat_),
         dynamic_as_occupied_current_(other.dynamic_as_occupied_current_),
         dynamic_as_occupied_future_(other.dynamic_as_occupied_future_),
         heat_w_(other.heat_w_),
@@ -67,6 +68,15 @@ class MapUtil {
         heat_Hmax_(other.heat_Hmax_),
         dyn_base_inflation_m_(other.dyn_base_inflation_m_),
         dyn_heat_tube_radius_m_(other.dyn_heat_tube_radius_m_),
+        social_heat_A0_(other.social_heat_A0_),
+        social_heat_dA_(other.social_heat_dA_),
+        social_heat_sigma_x0_(other.social_heat_sigma_x0_),
+        social_heat_sigma_y0_(other.social_heat_sigma_y0_),
+        social_heat_d_sigma_(other.social_heat_d_sigma_),
+        social_heat_d_r0_(other.social_heat_d_r0_),
+        social_heat_robot_radius_m_(other.social_heat_robot_radius_m_),
+        social_heat_delta_x_(other.social_heat_delta_x_),
+        social_heat_delta_y_(other.social_heat_delta_y_),
         heat_num_samples_(other.heat_num_samples_),
         dyn_pred_samples_(other.dyn_pred_samples_),
         dyn_pred_times_(other.dyn_pred_times_),
@@ -393,171 +403,12 @@ class MapUtil {
       heat_.clear();
     }
 
-    // 10a) Dynamic obstacle heat (time-invariant, max-over-time tube).
-    //      Heat is used only by weighted A* (global planner); static occupancy remains hard.
+    // 10a) Dynamic obstacle heat (selected model).
     if (dynamic_heat_enabled_) {
-      const float Th = std::max(0.0f, (float)traj_max_time);
-      const float tau_w = std::max(1e-3f, heat_tau_ratio_ * std::max(1e-3f, Th));
-
-      // Determine time samples:
-      std::vector<float> t_samples;
-      if (!dyn_pred_times_.empty()) {
-        t_samples = dyn_pred_times_;
+      if (use_social_dynamic_heat_) {
+        computeSocialDynamicHeat(obst_pos, obst_bbox, traj_max_time);
       } else {
-        const int M = std::max(2, heat_num_samples_);
-        t_samples.resize(M);
-        for (int j = 0; j < M; ++j) t_samples[j] = (float)j * Th / (float)(M - 1);
-      }
-
-      const size_t K = obst_pos.size();
-      if (K > 0) {
-        // Lightweight pow for small integer exponents.
-        auto pow_fast = [](float x, int p) -> float {
-          x = std::max(0.0f, x);
-          switch (p) {
-            case 1:
-              return x;
-            case 2:
-              return x * x;
-            case 3:
-              return x * x * x;
-            case 4: {
-              const float x2 = x * x;
-              return x2 * x2;
-            }
-            default:
-              return std::pow(x, (float)p);
-          }
-        };
-
-        // Precompute obstacle centers (float), bbox half-extents, and reachable radii.
-        std::vector<Eigen::Vector3f> ck_list(K);
-        std::vector<Eigen::Vector3f> hk_list(K);  // bbox half-extents
-        std::vector<float> Rreach_list(K);
-
-        for (size_t k = 0; k < K; ++k) {
-          ck_list[k] = obst_pos[k].cast<float>();
-
-          // Get bbox half-extents for this obstacle (default to small cube if not provided)
-          float hx = 0.4f, hy = 0.4f, hz = 0.4f;  // default half-extents
-          if (k < obst_bbox.size()) {
-            hx = obst_bbox[k].x();
-            hy = obst_bbox[k].y();
-            hz = obst_bbox[k].z();
-          }
-          hk_list[k] = Eigen::Vector3f(hx, hy, hz);
-
-          // Reachable radius: bbox extent + motion
-          const float max_extent = std::max({hx, hy, hz});
-          Rreach_list[k] = max_extent + (float)obst_max_vel_ * Th;
-        }
-
-        // Tube radius and time-decay weight per sample
-        const float R0 = std::max(0.0f, dyn_heat_tube_radius_m_);
-        const size_t J = t_samples.size();
-        std::vector<float> Rj(J), Wj(J);
-        for (size_t j = 0; j < J; ++j) {
-          const float tj = std::max(0.0f, t_samples[j]);
-          Rj[j] = R0 + heat_gamma_ * tj;
-          Wj[j] = std::exp(-tj / tau_w);
-        }
-
-        // Precompute predicted centers (fallback to ck if unavailable).
-        std::vector<Eigen::Vector3f> cj_flat(K * J);
-        for (size_t k = 0; k < K; ++k) {
-          for (size_t j = 0; j < J; ++j) {
-            Eigen::Vector3f cj = ck_list[k];
-            if (k < dyn_pred_samples_.size() && j < dyn_pred_samples_[k].size())
-              cj = dyn_pred_samples_[k][j].cast<float>();
-            cj_flat[k * J + j] = cj;
-          }
-        }
-
-        const int dim0 = dim_(0);
-        const int dim1 = dim_(1);
-        const int plane = dim0 * dim1;
-
-#pragma omp parallel for schedule(static)
-        for (int idx = 0; idx < total_size_; ++idx) {
-          // Heat is only relevant for traversable cells; skip hard obstacles unless soft-cost mode
-          if (map_[idx] > val_free_ && !use_soft_cost_obstacles_) continue;
-
-          const int ix = idx % dim0;
-          const int iy = (idx / dim0) % dim1;
-          const int iz = idx / plane;
-
-          const float xw = origin_d_.x() + (ix + 0.5f) * res_;
-          const float yw = origin_d_.y() + (iy + 0.5f) * res_;
-          const float zw = origin_d_.z() + (iz + 0.5f) * res_;
-
-          float best = 0.0f;
-
-          for (size_t k = 0; k < K; ++k) {
-            // Base reachable radius (finite horizon)
-            float Hbase = 0.0f;
-            const float Rreach = Rreach_list[k];
-            if (Rreach > 1e-6f) {
-              const Eigen::Vector3f& ck = ck_list[k];
-              const Eigen::Vector3f& hk = hk_list[k];
-
-              // Compute distance from point to box (0 if inside, positive if outside)
-              const float dx_abs = std::abs(xw - ck.x());
-              const float dy_abs = std::abs(yw - ck.y());
-              const float dz_abs = std::abs(zw - ck.z());
-
-              const float dx_box = std::max(0.0f, dx_abs - hk.x());
-              const float dy_box = std::max(0.0f, dy_abs - hk.y());
-              const float dz_box = std::max(0.0f, dz_abs - hk.z());
-
-              const float d2 = dx_box * dx_box + dy_box * dy_box + dz_box * dz_box;
-              const float R2 = Rreach * Rreach;
-
-              if (d2 <= R2) {
-                const float d = std::sqrt(std::max(0.0f, d2));
-                const float u = std::min(1.0f, std::max(0.0f, d / Rreach));
-                Hbase = heat_alpha0_ * pow_fast(1.0f - u, heat_p_);
-              }
-            }
-
-            // Tube bonus (max over time), bbox + growing margin with time, time-decayed
-            float tube_max = 0.0f;
-            const Eigen::Vector3f* cj_ptr = &cj_flat[k * J];
-            const Eigen::Vector3f& hk = hk_list[k];
-
-            for (size_t j = 0; j < J; ++j) {
-              const float R = Rj[j];
-              if (R <= 1e-6f) continue;
-
-              const Eigen::Vector3f& cj = cj_ptr[j];
-
-              // Distance from point to box at predicted position
-              const float dx_abs = std::abs(xw - cj.x());
-              const float dy_abs = std::abs(yw - cj.y());
-              const float dz_abs = std::abs(zw - cj.z());
-
-              const float dx_box = std::max(0.0f, dx_abs - hk.x());
-              const float dy_box = std::max(0.0f, dy_abs - hk.y());
-              const float dz_box = std::max(0.0f, dz_abs - hk.z());
-
-              const float d2 = dx_box * dx_box + dy_box * dy_box + dz_box * dz_box;
-              const float R2 = R * R;
-
-              if (d2 > R2) continue;
-
-              const float d = std::sqrt(std::max(0.0f, d2));
-              const float u = std::min(1.0f, std::max(0.0f, d / R));
-              const float g = pow_fast(1.0f - u, heat_q_);
-              tube_max = std::max(tube_max, Wj[j] * g);
-            }
-
-            float Hk = Hbase + heat_alpha1_ * tube_max;
-            if (heat_Hmax_ > 0.0f) Hk = std::min(Hk, heat_Hmax_);
-
-            best = std::max(best, Hk);
-          }
-
-          heat_[idx] = std::max(heat_[idx], best);
-        }
+        computeDynamicHeat(obst_pos, obst_bbox, traj_max_time);
       }
     }
 
@@ -691,6 +542,12 @@ class MapUtil {
   /** @brief Enable or disable dynamic obstacle heat map computation. */
   void setDynamicHeatEnabled(bool enabled) { dynamic_heat_enabled_ = enabled; }
 
+  /** @brief Choose social dynamic heat model instead of classic tube-based model. */
+  void setUseSocialDynamicHeat(bool enabled) { use_social_dynamic_heat_ = enabled; }
+
+  /** @brief Check whether social dynamic heat model is selected. */
+  bool useSocialDynamicHeat() const { return use_social_dynamic_heat_; }
+
   /** @brief Set the global planner weight for heat cost (edge_cost += w_heat * heat). */
   void setHeatWeight(float w_heat) { heat_w_ = w_heat; }
 
@@ -768,6 +625,21 @@ class MapUtil {
 
   /** @brief Set the base tube radius for dynamic heat corridor computation. */
   void setDynHeatTubeRadius(float r) { dyn_heat_tube_radius_m_ = r; }
+
+  /** @brief Configure social dynamic heat model parameters. */
+  void setSocialDynamicHeatParams(float A0, float dA, float sigma_x0, float sigma_y0,
+                                  float d_sigma, float d_r0, float robot_radius_m,
+                                  float delta_x, float delta_y) {
+    social_heat_A0_ = std::max(0.0f, A0);
+    social_heat_dA_ = std::max(0.0f, dA);
+    social_heat_sigma_x0_ = std::max(1e-3f, sigma_x0);
+    social_heat_sigma_y0_ = std::max(1e-3f, sigma_y0);
+    social_heat_d_sigma_ = std::max(0.0f, d_sigma);
+    social_heat_d_r0_ = std::max(0.0f, d_r0);
+    social_heat_robot_radius_m_ = std::max(0.0f, robot_radius_m);
+    social_heat_delta_x_ = delta_x;
+    social_heat_delta_y_ = delta_y;
+  }
 
   /** @brief Enable soft-cost mode where occupied cells receive a finite cost instead of being blocked.
    *  @param enable If true, occupied cells are traversable with a soft cost penalty.
@@ -1494,6 +1366,7 @@ class MapUtil {
   // ---------------- Dynamic heat-map state ----------------
   std::vector<float> heat_;
   bool dynamic_heat_enabled_{false};
+  bool use_social_dynamic_heat_{false};
   bool dynamic_as_occupied_current_{
       true};  // Mark current obstacle position as occupied (hard constraint)
   bool dynamic_as_occupied_future_{
@@ -1510,6 +1383,15 @@ class MapUtil {
   float heat_Hmax_{10.0f};
   float dyn_base_inflation_m_{0.5f};    // R0 in meters
   float dyn_heat_tube_radius_m_{2.0f};  // Radius of heat corridor [m]
+  float social_heat_A0_{30.0f};
+  float social_heat_dA_{0.8f};
+  float social_heat_sigma_x0_{2.0f};
+  float social_heat_sigma_y0_{1.0f};
+  float social_heat_d_sigma_{0.25f};
+  float social_heat_d_r0_{0.06f};
+  float social_heat_robot_radius_m_{0.0f};
+  float social_heat_delta_x_{0.2f};
+  float social_heat_delta_y_{0.15f};
   int heat_num_samples_{15};            // fallback if no prediction samples
   std::vector<vec_Vecf<3>> dyn_pred_samples_;
   std::vector<float> dyn_pred_times_;
@@ -1571,6 +1453,296 @@ class MapUtil {
           static_heat_off_.push_back({dx, dy, dz, d_m});
         }
       }
+    }
+  }
+
+  inline void computeDynamicHeat(const vec_Vecf<3>& obst_pos, const vec_Vecf<3>& obst_bbox,
+                                 double traj_max_time) {
+    const float Th = std::max(0.0f, (float)traj_max_time);
+    const float tau_w = std::max(1e-3f, heat_tau_ratio_ * std::max(1e-3f, Th));
+
+    std::vector<float> t_samples;
+    if (!dyn_pred_times_.empty()) {
+      t_samples = dyn_pred_times_;
+    } else {
+      const int M = std::max(2, heat_num_samples_);
+      t_samples.resize(M);
+      for (int j = 0; j < M; ++j) t_samples[j] = (float)j * Th / (float)(M - 1);
+    }
+
+    const size_t K = obst_pos.size();
+    if (K == 0) return;
+
+    auto pow_fast = [](float x, int p) -> float {
+      x = std::max(0.0f, x);
+      switch (p) {
+        case 1:
+          return x;
+        case 2:
+          return x * x;
+        case 3:
+          return x * x * x;
+        case 4: {
+          const float x2 = x * x;
+          return x2 * x2;
+        }
+        default:
+          return std::pow(x, (float)p);
+      }
+    };
+
+    std::vector<Eigen::Vector3f> ck_list(K);
+    std::vector<Eigen::Vector3f> hk_list(K);
+    std::vector<float> Rreach_list(K);
+
+    for (size_t k = 0; k < K; ++k) {
+      ck_list[k] = obst_pos[k].cast<float>();
+
+      float hx = 0.4f, hy = 0.4f, hz = 0.4f;
+      if (k < obst_bbox.size()) {
+        hx = obst_bbox[k].x();
+        hy = obst_bbox[k].y();
+        hz = obst_bbox[k].z();
+      }
+      hk_list[k] = Eigen::Vector3f(hx, hy, hz);
+
+      const float max_extent = std::max({hx, hy, hz});
+      Rreach_list[k] = max_extent + (float)obst_max_vel_ * Th;
+    }
+
+    const float R0 = std::max(0.0f, dyn_heat_tube_radius_m_);
+    const size_t J = t_samples.size();
+    std::vector<float> Rj(J), Wj(J);
+    for (size_t j = 0; j < J; ++j) {
+      const float tj = std::max(0.0f, t_samples[j]);
+      Rj[j] = R0 + heat_gamma_ * tj;
+      Wj[j] = std::exp(-tj / tau_w);
+    }
+
+    std::vector<Eigen::Vector3f> cj_flat(K * J);
+    for (size_t k = 0; k < K; ++k) {
+      for (size_t j = 0; j < J; ++j) {
+        Eigen::Vector3f cj = ck_list[k];
+        if (k < dyn_pred_samples_.size() && j < dyn_pred_samples_[k].size())
+          cj = dyn_pred_samples_[k][j].cast<float>();
+        cj_flat[k * J + j] = cj;
+      }
+    }
+
+    const int dim0 = dim_(0);
+    const int dim1 = dim_(1);
+    const int plane = dim0 * dim1;
+
+#pragma omp parallel for schedule(static)
+    for (int idx = 0; idx < total_size_; ++idx) {
+      if (map_[idx] > val_free_ && !use_soft_cost_obstacles_) continue;
+
+      const int ix = idx % dim0;
+      const int iy = (idx / dim0) % dim1;
+      const int iz = idx / plane;
+
+      const float xw = origin_d_.x() + (ix + 0.5f) * res_;
+      const float yw = origin_d_.y() + (iy + 0.5f) * res_;
+      const float zw = origin_d_.z() + (iz + 0.5f) * res_;
+
+      float best = 0.0f;
+
+      for (size_t k = 0; k < K; ++k) {
+        float Hbase = 0.0f;
+        const float Rreach = Rreach_list[k];
+        if (Rreach > 1e-6f) {
+          const Eigen::Vector3f& ck = ck_list[k];
+          const Eigen::Vector3f& hk = hk_list[k];
+
+          const float dx_abs = std::abs(xw - ck.x());
+          const float dy_abs = std::abs(yw - ck.y());
+          const float dz_abs = std::abs(zw - ck.z());
+
+          const float dx_box = std::max(0.0f, dx_abs - hk.x());
+          const float dy_box = std::max(0.0f, dy_abs - hk.y());
+          const float dz_box = std::max(0.0f, dz_abs - hk.z());
+
+          const float d2 = dx_box * dx_box + dy_box * dy_box + dz_box * dz_box;
+          const float R2 = Rreach * Rreach;
+
+          if (d2 <= R2) {
+            const float d = std::sqrt(std::max(0.0f, d2));
+            const float u = std::min(1.0f, std::max(0.0f, d / Rreach));
+            Hbase = heat_alpha0_ * pow_fast(1.0f - u, heat_p_);
+          }
+        }
+
+        float tube_max = 0.0f;
+        const Eigen::Vector3f* cj_ptr = &cj_flat[k * J];
+        const Eigen::Vector3f& hk = hk_list[k];
+
+        for (size_t j = 0; j < J; ++j) {
+          const float R = Rj[j];
+          if (R <= 1e-6f) continue;
+
+          const Eigen::Vector3f& cj = cj_ptr[j];
+
+          const float dx_abs = std::abs(xw - cj.x());
+          const float dy_abs = std::abs(yw - cj.y());
+          const float dz_abs = std::abs(zw - cj.z());
+
+          const float dx_box = std::max(0.0f, dx_abs - hk.x());
+          const float dy_box = std::max(0.0f, dy_abs - hk.y());
+          const float dz_box = std::max(0.0f, dz_abs - hk.z());
+
+          const float d2 = dx_box * dx_box + dy_box * dy_box + dz_box * dz_box;
+          const float R2 = R * R;
+
+          if (d2 > R2) continue;
+
+          const float d = std::sqrt(std::max(0.0f, d2));
+          const float u = std::min(1.0f, std::max(0.0f, d / R));
+          const float g = pow_fast(1.0f - u, heat_q_);
+          tube_max = std::max(tube_max, Wj[j] * g);
+        }
+
+        float Hk = Hbase + heat_alpha1_ * tube_max;
+        if (heat_Hmax_ > 0.0f) Hk = std::min(Hk, heat_Hmax_);
+
+        best = std::max(best, Hk);
+      }
+
+      heat_[idx] = std::max(heat_[idx], best);
+    }
+  }
+
+  inline void computeSocialDynamicHeat(const vec_Vecf<3>& obst_pos,
+                                       const vec_Vecf<3>& obst_bbox, double traj_max_time) {
+    const size_t K = obst_pos.size();
+    if (K == 0) return;
+
+    const float Th = std::max(0.0f, (float)traj_max_time);
+    std::vector<float> t_samples;
+    if (!dyn_pred_times_.empty()) {
+      t_samples = dyn_pred_times_;
+    } else {
+      const int M = std::max(2, heat_num_samples_);
+      t_samples.resize(M);
+      for (int j = 0; j < M; ++j) t_samples[j] = (float)j * Th / (float)(M - 1);
+    }
+
+    const size_t J = t_samples.size();
+    if (J == 0) return;
+
+    std::vector<Eigen::Vector3f> ck_list(K);
+    std::vector<Eigen::Vector3f> hk_list(K);
+    std::vector<float> r0_init_list(K);
+
+    for (size_t k = 0; k < K; ++k) {
+      ck_list[k] = obst_pos[k].cast<float>();
+
+      float hx = 0.4f, hy = 0.4f, hz = 0.4f;
+      if (k < obst_bbox.size()) {
+        hx = obst_bbox[k].x();
+        hy = obst_bbox[k].y();
+        hz = obst_bbox[k].z();
+      }
+      hk_list[k] = Eigen::Vector3f(hx, hy, hz);
+      r0_init_list[k] = 0.6f;
+    }
+
+    std::vector<Eigen::Vector3f> cj_flat(K * J);
+    for (size_t k = 0; k < K; ++k) {
+      for (size_t j = 0; j < J; ++j) {
+        Eigen::Vector3f cj = ck_list[k];
+        if (k < dyn_pred_samples_.size() && j < dyn_pred_samples_[k].size())
+          cj = dyn_pred_samples_[k][j].cast<float>();
+        cj_flat[k * J + j] = cj;
+      }
+    }
+
+    std::vector<Eigen::Vector2f> heading_fallback(K, Eigen::Vector2f(1.0f, 0.0f));
+    for (size_t k = 0; k < K; ++k) {
+      if (k < dyn_pred_samples_.size() && dyn_pred_samples_[k].size() > 1) {
+        const Eigen::Vector3f start = dyn_pred_samples_[k].front().cast<float>();
+        const Eigen::Vector3f end = dyn_pred_samples_[k].back().cast<float>();
+        Eigen::Vector2f d = (end - start).head<2>();
+        if (d.norm() > 1e-3f) heading_fallback[k] = d.normalized();
+      }
+    }
+
+    const int dim0 = dim_(0);
+    const int dim1 = dim_(1);
+    const int plane = dim0 * dim1;
+
+#pragma omp parallel for schedule(static)
+    for (int idx = 0; idx < total_size_; ++idx) {
+      if (map_[idx] > val_free_ && !use_soft_cost_obstacles_) continue;
+
+      const int ix = idx % dim0;
+      const int iy = (idx / dim0) % dim1;
+      const int iz = idx / plane;
+
+      const float xw = origin_d_.x() + (ix + 0.5f) * res_;
+      const float yw = origin_d_.y() + (iy + 0.5f) * res_;
+      const float zw = origin_d_.z() + (iz + 0.5f) * res_;
+
+      float best = 0.0f;
+
+      for (size_t k = 0; k < K; ++k) {
+        const Eigen::Vector3f* cj_ptr = &cj_flat[k * J];
+        const Eigen::Vector3f& hk = hk_list[k];
+
+        float social_max = 0.0f;
+
+        for (size_t j = 0; j < J; ++j) {
+          const float t = std::max(0.0f, t_samples[j]);
+          const float r0_t = std::max(0.0f, r0_init_list[k] - social_heat_d_r0_ * t);
+          const float A_t = std::max(0.0f, social_heat_A0_ - social_heat_dA_ * t);
+          if (A_t <= 1e-3f) continue;
+
+          const float sigma_x_t = social_heat_sigma_x0_ + social_heat_d_sigma_ * t;
+          const float sigma_y_t = social_heat_sigma_y0_ + social_heat_d_sigma_ * t;
+          const float var_x_2 = 2.0f * sigma_x_t * sigma_x_t;
+          const float var_y_2 = 2.0f * sigma_y_t * sigma_y_t;
+
+          const Eigen::Vector3f& cj = cj_ptr[j];
+
+          const float z_halo = hk.z() + std::max(0.0f, dyn_base_inflation_m_);
+          if (std::abs(zw - cj.z()) > z_halo) continue;
+
+          Eigen::Vector2f heading = heading_fallback[k];
+          if (j > 0) {
+            Eigen::Vector2f local_v = (cj - cj_ptr[j - 1]).head<2>();
+            if (local_v.norm() > 1e-3f) heading = local_v.normalized();
+          }
+
+          const float cos_theta = heading.x();
+          const float sin_theta = heading.y();
+
+          const float dx = xw - cj.x();
+          const float dy = yw - cj.y();
+          const float dist_xy = std::sqrt(dx * dx + dy * dy);
+
+          const float hard_collision_radius = r0_t + social_heat_robot_radius_m_;
+          float cost = 0.0f;
+
+          if (dist_xy <= hard_collision_radius) {
+            cost = A_t;
+          } else {
+            const float dx_rot = dx * cos_theta + dy * sin_theta;
+            const float dy_rot = -dx * sin_theta + dy * cos_theta;
+
+            const float x_soc = dx_rot - social_heat_delta_x_;
+            const float y_soc = dy_rot - social_heat_delta_y_;
+
+            const float exponent = (x_soc * x_soc) / var_x_2 + (y_soc * y_soc) / var_y_2;
+            cost = A_t * std::max(0.0f, (1.0f - 0.5f * exponent)) * std::exp(-0.3f * exponent);
+          }
+
+          social_max = std::max(social_max, cost);
+        }
+
+        if (heat_Hmax_ > 0.0f) social_max = std::min(social_max, heat_Hmax_);
+        best = std::max(best, social_max);
+      }
+
+      heat_[idx] = std::max(heat_[idx], best);
     }
   }
 

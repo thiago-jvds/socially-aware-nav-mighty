@@ -14,6 +14,7 @@ from dynus_interfaces.msg import State
 from geometry_msgs.msg import PoseStamped, Vector3
 from std_msgs.msg import Header
 import math
+import json
 
 class GoalMonitorNode(Node):
     def __init__(self):
@@ -24,53 +25,13 @@ class GoalMonitorNode(Node):
         self.get_logger().info(f"Namespace: {self.namespace}")
 
         # Parameters
-        self.declare_parameter('goal_tolerance', 1.0)  # Distance tolerance to consider goal reached
+        self.declare_parameter('goal_tolerance', 5.0)  # Distance tolerance to consider goal reached
+        self.declare_parameter('goal_points', '[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]') # Default goal points for the circle pattern
         self.goal_tolerance = self.get_parameter('goal_tolerance').value
         self.declare_parameter('use_hardware', False)
         self.use_hardware = self.get_parameter('use_hardware').value
-        self.declare_parameter('num_agents', 10)
-        num_agents = self.get_parameter('num_agents').value
-        self.declare_parameter('radius', 10.0)
-        radius = self.get_parameter('radius').value
         self.distance_check_frequency = 1.0  # Frequency to check the distance to the goal
         self.current_goal_index = 0
-
-        # Compute swap goals dynamically based on circle formation.
-        # Agent i sits at angle = 2*pi*(i-1)/N on a circle of the given radius;
-        # its swap target is the diametrically opposite point (angle + pi).
-        if self.namespace.startswith('NX'):
-            agent_index = int(self.namespace[2:])  # NX01 -> 1
-            z = 1.0
-            angle = 2.0 * math.pi * (agent_index - 1) / num_agents
-            own_x = round(radius * math.cos(angle), 3)
-            own_y = round(radius * math.sin(angle), 3)
-            opp_x = round(radius * math.cos(angle + math.pi), 3)
-            opp_y = round(radius * math.sin(angle + math.pi), 3)
-            self.goal_points = [[opp_x, opp_y, z], [own_x, own_y, z]]
-            self.get_logger().info(
-                f"Circle swap goals (N={num_agents}, R={radius}): "
-                f"start ({own_x},{own_y}) <-> opposite ({opp_x},{opp_y})")
-
-        elif self.namespace.startswith('RR'):
-            agent_index = int(self.namespace[2:])  # RR01 -> 1
-            z = 0.5
-            angle = 2.0 * math.pi * (agent_index - 1) / num_agents
-            own_x = round(radius * math.cos(angle), 3)
-            own_y = round(radius * math.sin(angle), 3)
-            opp_x = round(radius * math.cos(angle + math.pi), 3)
-            opp_y = round(radius * math.sin(angle + math.pi), 3)
-            self.goal_points = [[opp_x, opp_y, z], [own_x, own_y, z]]
-            self.get_logger().info(
-                f"Circle swap goals (N={num_agents}, R={radius}): "
-                f"start ({own_x},{own_y}) <-> opposite ({opp_x},{opp_y})")
-
-        else:
-            self.get_logger().error(f"Unknown namespace: {self.namespace}. No goal points defined.")
-            self.goal_points = [[0.0, 0.0, 0.0]]
-
-        # Repeat the two-goal swap pattern
-        num_iterations = 9
-        self.goal_points = self.goal_points * num_iterations
 
         # Publishers and Subscribers
         self.state_sub = self.create_subscription(State, 'state', self.state_callback, 10)
@@ -85,6 +46,10 @@ class GoalMonitorNode(Node):
         # Data to store
         self.current_position = Vector3()
 
+        self.goal_points = eval(self.get_parameter('goal_points').value)  # Convert JSON string to actual list
+
+        self.get_logger().info(f"goal points: {self.goal_points}")
+
         self.get_logger().info("Goal Monitor Node initialized.")
 
     def state_callback(self, msg: State):
@@ -95,7 +60,7 @@ class GoalMonitorNode(Node):
     def distance_check_callback(self):
 
         # Get the current goal point
-        goal_x, goal_y, goal_z = self.goal_points[self.current_goal_index]
+        goal_x, goal_y, goal_z = tuple(self.goal_points[self.current_goal_index])
 
         # Compute the Euclidean distance to the current goal
         distance = math.sqrt(

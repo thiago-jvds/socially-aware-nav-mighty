@@ -42,7 +42,7 @@ class RepubGoalNode(Node):
         term_goal = PoseStamped()
         term_goal.header = Header()
         term_goal.header.stamp = self.get_clock().now().to_msg()
-        term_goal.header.frame_id = "world"
+        term_goal.header.frame_id = f"{self.rover_name}/map"
 
         # set goal position
         term_goal.pose.position.x = goal_pos.x

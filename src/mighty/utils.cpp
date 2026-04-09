@@ -260,6 +260,21 @@ namespace mighty_utils
     return msg_cov;
   }
 
+  // Function to convert std::vector<float> to Eigen::Vector3d
+  Eigen::Vector3d convertMuMsg2Mu(const std::vector<float> &msg_mu)
+  {
+
+    // Ensure the vector has exactly 3 elements
+    if (msg_mu.size() != 3)
+    {
+      throw std::invalid_argument("msg_mu must have exactly 3 elements.");
+    }
+
+    Eigen::Vector3d mu;
+    mu << msg_mu[0], msg_mu[1], msg_mu[2];
+    return mu;
+  }
+
   // Function to convert std::vector<float> to Eigen::Matrix<double, 6, 1>
   Eigen::Matrix<double, 6, 1> convertCoeffMsg2Coeff(const std::vector<float> &msg_coeff)
   {

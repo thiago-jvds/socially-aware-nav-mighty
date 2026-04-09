@@ -17,6 +17,7 @@
 #include "dynus_interfaces/msg/trajectory.hpp"
 #include "dynus_interfaces/msg/yaw_output.hpp"
 #include "dynus_interfaces/msg/pn_adaptation.hpp"
+#include "dynus_interfaces/msg/speedy_path.hpp"
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <mighty/utils.hpp>
@@ -206,7 +207,7 @@ namespace mighty
         rclcpp::Publisher<dynus_interfaces::msg::DynTraj>::SharedPtr pub_own_traj_;
         rclcpp::Publisher<dynus_interfaces::msg::Goal>::SharedPtr pub_goal_;
         rclcpp::Publisher<dynus_interfaces::msg::Trajectory>::SharedPtr pub_trajectory_;
-        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_mpc_path_;
+        rclcpp::Publisher<dynus_interfaces::msg::SpeedyPath>::SharedPtr pub_mpc_path_;
         rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_G_;
         rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_E_;
         rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_G_term_;

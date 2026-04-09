@@ -104,7 +104,7 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   pub_own_traj_ = this->create_publisher<dynus_interfaces::msg::DynTraj>("/trajs", critical_qos);
   pub_goal_ = this->create_publisher<dynus_interfaces::msg::Goal>("goal", critical_qos);
   pub_trajectory_ = this->create_publisher<dynus_interfaces::msg::Trajectory>("trajectory", critical_qos);
-  pub_mpc_path_ = this->create_publisher<nav_msgs::msg::Path>("mpc_waypoints", 10);
+  pub_mpc_path_ = this->create_publisher<dynus_interfaces::msg::SpeedyPath>("mpc_waypoints", 10);
   pub_goal_reached_ = this->create_publisher<std_msgs::msg::Empty>("goal_reached", critical_qos);
   pub_command_to_exec_time_ = this->create_publisher<std_msgs::msg::Float64>("command_to_exec_time", 10);
 
@@ -176,12 +176,13 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   if (par_.use_hardware)
   {
     // Hardware: subscribe independently (time-sync can fail due to timestamp mismatch)
+    auto sensor_qos = rclcpp::SensorDataQoS();
     sub_occupancy_grid_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("occupancy_grid",
-        rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data)),
+      sensor_qos,
         std::bind(&MIGHTY_NODE::occupancyMapCallback, this, std::placeholders::_1),
         options_map);
     sub_unknown_grid_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("unknown_grid",
-        rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data)),
+      sensor_qos,
         std::bind(&MIGHTY_NODE::unknownMapCallback, this, std::placeholders::_1),
         options_map);
     RCLCPP_INFO(this->get_logger(), "Hardware mode: subscribing to occupancy_grid and unknown_grid independently");
@@ -309,6 +310,7 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("use_heat_map", false);
   this->declare_parameter("heat_weight", 1.0);
   this->declare_parameter("dynamic_heat_enabled", false);
+  this->declare_parameter("dynamic_heat_use_social", false);
   this->declare_parameter("dynamic_as_occupied_current", true);
   this->declare_parameter("dynamic_as_occupied_future", false);
   this->declare_parameter("heat_alpha0", 1.0);
@@ -321,6 +323,15 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("obst_max_vel", 1.0);
   this->declare_parameter("dyn_base_inflation_m", 0.5);
   this->declare_parameter("dyn_heat_tube_radius_m", 2.0);
+  this->declare_parameter("social_heat_A0", 30.0);
+  this->declare_parameter("social_heat_dA", 0.8);
+  this->declare_parameter("social_heat_sigma_x0", 2.0);
+  this->declare_parameter("social_heat_sigma_y0", 1.0);
+  this->declare_parameter("social_heat_d_sigma", 0.25);
+  this->declare_parameter("social_heat_d_r0", 0.06);
+  this->declare_parameter("social_heat_robot_radius_m", 0.0);
+  this->declare_parameter("social_heat_delta_x", 0.2);
+  this->declare_parameter("social_heat_delta_y", 0.15);
   this->declare_parameter("heat_num_samples", 15);
   this->declare_parameter("static_heat_enabled", false);
   this->declare_parameter("static_heat_alpha", 2.0);
@@ -401,6 +412,12 @@ void MIGHTY_NODE::declareParameters()
 
   // Dynamic obstacles parameters
   this->declare_parameter("traj_lifetime", 10.0);
+
+  // Social avoidance parameters
+  this->declare_parameter("social_avoidance_enabled", false);
+  this->declare_parameter("social_avoidance_d_trigger", 1.0);
+  this->declare_parameter("social_avoidance_min_repulsion_norm", 0.1);
+  this->declare_parameter("social_avoidance_h", 1.0);
 
   // Dynamic k_value parameters
   this->declare_parameter("num_replanning_before_adapt", 10);
@@ -558,6 +575,7 @@ void MIGHTY_NODE::setParameters()
   par_.use_heat_map = this->get_parameter("use_heat_map").as_bool();
   par_.heat_weight = this->get_parameter("heat_weight").as_double();
   par_.dynamic_heat_enabled = this->get_parameter("dynamic_heat_enabled").as_bool();
+  par_.dynamic_heat_use_social = this->get_parameter("dynamic_heat_use_social").as_bool();
   par_.dynamic_as_occupied_current = this->get_parameter("dynamic_as_occupied_current").as_bool();
   par_.dynamic_as_occupied_future = this->get_parameter("dynamic_as_occupied_future").as_bool();
   par_.heat_alpha0 = this->get_parameter("heat_alpha0").as_double();
@@ -570,6 +588,15 @@ void MIGHTY_NODE::setParameters()
   par_.obst_max_vel = this->get_parameter("obst_max_vel").as_double();
   par_.dyn_base_inflation_m = this->get_parameter("dyn_base_inflation_m").as_double();
   par_.dyn_heat_tube_radius_m = this->get_parameter("dyn_heat_tube_radius_m").as_double();
+  par_.social_heat_A0 = this->get_parameter("social_heat_A0").as_double();
+  par_.social_heat_dA = this->get_parameter("social_heat_dA").as_double();
+  par_.social_heat_sigma_x0 = this->get_parameter("social_heat_sigma_x0").as_double();
+  par_.social_heat_sigma_y0 = this->get_parameter("social_heat_sigma_y0").as_double();
+  par_.social_heat_d_sigma = this->get_parameter("social_heat_d_sigma").as_double();
+  par_.social_heat_d_r0 = this->get_parameter("social_heat_d_r0").as_double();
+  par_.social_heat_robot_radius_m = this->get_parameter("social_heat_robot_radius_m").as_double();
+  par_.social_heat_delta_x = this->get_parameter("social_heat_delta_x").as_double();
+  par_.social_heat_delta_y = this->get_parameter("social_heat_delta_y").as_double();
   par_.heat_num_samples = this->get_parameter("heat_num_samples").as_int();
   par_.static_heat_enabled = this->get_parameter("static_heat_enabled").as_bool();
   par_.static_heat_alpha = this->get_parameter("static_heat_alpha").as_double();
@@ -651,6 +678,12 @@ void MIGHTY_NODE::setParameters()
 
   // Dynamic obstacles parameters
   par_.traj_lifetime = this->get_parameter("traj_lifetime").as_double();
+
+  // Social avoidance parameters
+  par_.social_avoidance_enabled = this->get_parameter("social_avoidance_enabled").as_bool();
+  par_.social_avoidance_d_trigger = this->get_parameter("social_avoidance_d_trigger").as_double();
+  par_.social_avoidance_min_repulsion_norm = this->get_parameter("social_avoidance_min_repulsion_norm").as_double();
+  par_.social_avoidance_h = this->get_parameter("social_avoidance_h").as_double();
 
   // Dynamic k_value parameters
   par_.num_replanning_before_adapt = this->get_parameter("num_replanning_before_adapt").as_int();
@@ -1393,7 +1426,7 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
   // Get pwp
   if (msg.mode == "pwp")
   {
-    traj->pwp = mighty_utils::convertPwpMsg2Pwp(msg.quintic_pwp);
+    traj->pwp = mighty_utils::convertPwpMsg2Pwp(msg.pwp);
     traj->mode = dynTraj::Mode::Piecewise;
   }
 
@@ -1430,6 +1463,11 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
     if (msg.poly_cov.size() != 0)
     {
       traj->poly_cov = mighty_utils::convertCovMsg2Cov(msg.poly_cov); // future traj cov
+    }
+
+    if (msg.mu.size() != 0)
+    {
+      traj->mu = mighty_utils::convertMuMsg2Mu(msg.mu); // IMM Mode probabilities
     }
 
     if (msg.function.size() == 3)
@@ -2094,19 +2132,20 @@ void MIGHTY_NODE::publishTrajectory()
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::publishMpcPath()
-{
+void MIGHTY_NODE::publishMpcPath() {
   // Get optimized trajectory setpoints (smooth quintic Hermite spline)
   mighty_ptr_->retrieveGoalSetpoints(goal_setpoints_);
 
-  if (goal_setpoints_.size() < 2)
-    return;
+  if (goal_setpoints_.size() < 2) return;
 
-  nav_msgs::msg::Path path_msg;
+  dynus_interfaces::msg::SpeedyPath path_msg;
   path_msg.header.stamp = this->now();
   path_msg.header.frame_id = par_.map_frame_id;
 
   const double spacing = par_.mpc_path_spacing;
+
+  // Collect speeds alongside poses
+  std::vector<double> speeds;
 
   // Always include first point
   auto addPose = [&](const state& sp) {
@@ -2117,17 +2156,16 @@ void MIGHTY_NODE::publishMpcPath()
     pose.pose.position.z = sp.pos.z();
     pose.pose.orientation.w = 1.0;
     path_msg.poses.push_back(pose);
+    speeds.push_back(sp.vel.head<2>().norm());
   };
 
   addPose(goal_setpoints_.front());
   Eigen::Vector3d last_emitted = goal_setpoints_.front().pos;
 
   // Walk through setpoints, emit when distance threshold exceeded
-  for (size_t i = 1; i < goal_setpoints_.size(); ++i)
-  {
+  for (size_t i = 1; i < goal_setpoints_.size(); ++i) {
     double dist = (goal_setpoints_[i].pos - last_emitted).head<2>().norm();
-    if (dist >= spacing)
-    {
+    if (dist >= spacing) {
       addPose(goal_setpoints_[i]);
       last_emitted = goal_setpoints_[i].pos;
     }
@@ -2135,27 +2173,21 @@ void MIGHTY_NODE::publishMpcPath()
 
   // Always include last point
   const auto& last = goal_setpoints_.back();
-  if ((last.pos - last_emitted).head<2>().norm() > 1e-6)
-    addPose(last);
+  if ((last.pos - last_emitted).head<2>().norm() > 1e-6) addPose(last);
 
   // Need at least 2 points for MPC
-  if (path_msg.poses.size() < 2)
-    return;
+  if (path_msg.poses.size() < 2) return;
 
   // Set yaw from direction to next waypoint
-  for (size_t i = 0; i < path_msg.poses.size(); ++i)
-  {
+  for (size_t i = 0; i < path_msg.poses.size(); ++i) {
     double yaw = 0.0;
-    if (i + 1 < path_msg.poses.size())
-    {
-      double dx = path_msg.poses[i+1].pose.position.x - path_msg.poses[i].pose.position.x;
-      double dy = path_msg.poses[i+1].pose.position.y - path_msg.poses[i].pose.position.y;
+    if (i + 1 < path_msg.poses.size()) {
+      double dx = path_msg.poses[i + 1].pose.position.x - path_msg.poses[i].pose.position.x;
+      double dy = path_msg.poses[i + 1].pose.position.y - path_msg.poses[i].pose.position.y;
       yaw = std::atan2(dy, dx);
-    }
-    else if (i > 0)
-    {
-      double dx = path_msg.poses[i].pose.position.x - path_msg.poses[i-1].pose.position.x;
-      double dy = path_msg.poses[i].pose.position.y - path_msg.poses[i-1].pose.position.y;
+    } else if (i > 0) {
+      double dx = path_msg.poses[i].pose.position.x - path_msg.poses[i - 1].pose.position.x;
+      double dy = path_msg.poses[i].pose.position.y - path_msg.poses[i - 1].pose.position.y;
       yaw = std::atan2(dy, dx);
     }
     path_msg.poses[i].pose.orientation.x = 0.0;
@@ -2164,8 +2196,12 @@ void MIGHTY_NODE::publishMpcPath()
     path_msg.poses[i].pose.orientation.w = std::cos(yaw / 2.0);
   }
 
+  // Assign per-waypoint speeds
+  path_msg.speeds = speeds;
+
   pub_mpc_path_->publish(path_msg);
 }
+
 
 // ----------------------------------------------------------------------------
 

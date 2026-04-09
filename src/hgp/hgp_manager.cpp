@@ -50,9 +50,14 @@ void HGPManager::setParameters(const parameters& par) {
 
   // Dynamic heat configuration
   map_util_->setDynamicHeatEnabled(par.dynamic_heat_enabled);
+  map_util_->setUseSocialDynamicHeat(par.dynamic_heat_use_social);
   map_util_->setDynamicHeatParams(par.heat_alpha0, par.heat_alpha1, par.heat_p, par.heat_q,
                                   par.heat_tau_ratio, par.heat_gamma, par.heat_Hmax,
                                   par.dyn_base_inflation_m);
+  map_util_->setSocialDynamicHeatParams(
+      par.social_heat_A0, par.social_heat_dA, par.social_heat_sigma_x0, par.social_heat_sigma_y0,
+      par.social_heat_d_sigma, par.social_heat_d_r0, par.social_heat_robot_radius_m,
+      par.social_heat_delta_x, par.social_heat_delta_y);
   map_util_->setDynHeatTubeRadius(par.dyn_heat_tube_radius_m);
   map_util_->setHeatWeight(par.heat_weight);
 
@@ -67,7 +72,14 @@ void HGPManager::setParameters(const parameters& par) {
   std::cout << "  static_heat_alpha: " << par.static_heat_alpha
             << ", static_heat_rmax_m: " << par.static_heat_rmax_m << std::endl;
   std::cout << "  dynamic_heat_enabled: " << par.dynamic_heat_enabled
+            << ", dynamic_heat_use_social: " << par.dynamic_heat_use_social
             << ", static_heat_enabled: " << par.static_heat_enabled << std::endl;
+  std::cout << "  social_heat(A0,dA,sx0,sy0,ds,dr0,rr,dx,dy): "
+            << par.social_heat_A0 << ", " << par.social_heat_dA << ", "
+            << par.social_heat_sigma_x0 << ", " << par.social_heat_sigma_y0 << ", "
+            << par.social_heat_d_sigma << ", " << par.social_heat_d_r0 << ", "
+            << par.social_heat_robot_radius_m << ", " << par.social_heat_delta_x << ", "
+            << par.social_heat_delta_y << std::endl;
   std::cout << "===================================" << std::endl;
 
   // Static heat configuration

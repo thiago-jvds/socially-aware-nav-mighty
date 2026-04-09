@@ -32,6 +32,9 @@ def generate_launch_description():
     use_ground_robot_arg = DeclareLaunchArgument(
         'use_ground_robot', default_value='false', description='Use ground robot (affects RViz config)'
     )
+    use_ped_obstacles_arg = DeclareLaunchArgument(
+        'use_ped_obstacles', default_value='false', description='Flag to enable or disable pedestrian obstacles'
+    )
 
     # benchmark name
     benchmark_name_arg = DeclareLaunchArgument('benchmark_name', default_value='benchmark_name', description='Benchmark name')
@@ -68,6 +71,12 @@ def generate_launch_description():
             'medium_forest': 'medium_forest.world',
             'hard_forest': 'hard_forest.world',
             'dynamic_forest': 'dynamic_forest.world',
+            'empty_corridor': 'empty_corridor.world',
+            'T_junction': 'T_junction.world',
+            'corridor_overtake': 'corridor_overtake.world',
+            'social_passing': 'social_passing.world',
+            'social_crossing': 'social_crossing.world',
+            'social_overtaking': 'social_overtaking.world',
         }
 
         # Choose the world file based on the provided environment.
@@ -78,6 +87,7 @@ def generate_launch_description():
         use_dyn_obs = convert_str_to_bool(LaunchConfiguration('use_dyn_obs').perform(context))
         use_gazebo_gui = LaunchConfiguration('use_gazebo_gui').perform(context)
         use_ground_robot = convert_str_to_bool(LaunchConfiguration('use_ground_robot').perform(context))
+        use_ped_obstacles = convert_str_to_bool(LaunchConfiguration('use_ped_obstacles').perform(context))
 
         # Create a rviz node - prefer source rviz config over installed one
         rviz_config_filename = 'mighty_sim_ground_robot.rviz' if use_ground_robot else 'mighty.rviz'
@@ -130,10 +140,23 @@ def generate_launch_description():
                                 }.items()
         )
 
+        peds_obstacles_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles_pedestrians.launch.py'])
+            ),
+            launch_arguments={
+                'num_obstacles': '10',
+                'env_value': env_value,
+                'seed': '25',
+            }.items()
+        )
+       
+
         # Return launch description
         nodes_to_start = [gazebo_launch]
         nodes_to_start.append(rviz_node) if use_rviz else None
         nodes_to_start.append(dynamic_obstacles_launch) if use_dyn_obs else None
+        nodes_to_start.append(peds_obstacles_launch) if use_ped_obstacles else None
 
         return nodes_to_start
 
@@ -143,6 +166,7 @@ def generate_launch_description():
         use_gazebo_gui_arg,
         use_dyn_obs_arg,
         use_ground_robot_arg,
+        use_ped_obstacles_arg,
         benchmark_name_arg,
         OpaqueFunction(function=launch_setup)
     ])

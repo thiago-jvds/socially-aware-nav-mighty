@@ -75,6 +75,12 @@ mighty_node:
         # --- Dynamic Obstacles ---
         obst_max_vel: 0.5                               # [m/s] Expected max velocity of dynamic obstacles
 
+        # --- Social Avoidance ---
+        social_avoidance_enabled: false                 # [-] Enable social avoidance near dynamic agents
+        social_avoidance_d_trigger: 1.5                 # [m] Threat trigger distance
+        social_avoidance_min_repulsion_norm: 0.1        # [-] Minimum summed repulsion norm to trigger avoidance
+        social_avoidance_h: 1.0                         # [m] Evasion step distance
+
         # =====================================================================
         # [TUNE] — Adjust for performance / behavior trade-offs
         # =====================================================================
@@ -154,6 +160,7 @@ mighty_node:
         # --- Heat Map Internals ---
         use_heat_map: true                              # [-] Master toggle for heat map
         dynamic_heat_enabled: true                      # [-] Enable dynamic obstacle heat
+        dynamic_heat_use_social: false                  # [-] Use social dynamic heat model (false = classic)
         dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
         dynamic_as_occupied_future: false                # [-] Mark obstacle's future cells as hard-occupied
         heat_p: 2                                       # [-] Reachability blob falloff power

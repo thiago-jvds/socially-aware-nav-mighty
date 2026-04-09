@@ -67,6 +67,9 @@ namespace mighty_utils
     // Function to convert Eigen::Vector3d to std::vector<float>
     std::vector<float> convertCov2CovMsg(const Eigen::Vector3d& cov);
 
+    // Function to convert std::vector<float> to Eigen::Vector3d
+    Eigen::Vector3d convertMuMsg2Mu(const std::vector<float>& msg_mu);
+
     // Function to convert std::vector<float> to Eigen::Matrix<double, 6, 1>
     Eigen::Matrix<double, 6, 1> convertCoeffMsg2Coeff(const std::vector<float>& msg_coeff);
 

@@ -16,7 +16,7 @@
 #include <algorithm>
 #include <vector>
 #include <stdlib.h>
-
+#include <array>
 #include "timer.hpp"
 #include "hgp/termcolor.hpp"
 #include "mighty/mighty_type.hpp"
@@ -68,7 +68,8 @@ enum DroneStatus
   YAWING = 0,
   TRAVELING = 1,
   GOAL_SEEN = 2,
-  GOAL_REACHED = 3
+  GOAL_REACHED = 3,
+  SOCIAL_AVOIDING = 4
 };
 
 class MIGHTY
@@ -78,6 +79,7 @@ public:
   // Methods
   MIGHTY(parameters par);                                                                                                           
   bool needReplan(const state &local_state, const state &local_G_term, const state &last_plan_state);
+  bool checkSocialAvoidance(double current_time);
   bool findAandAtime(state &A, double &A_time, double current_time, double last_replaning_computation_time);
   bool checkIfPointOccupied(const Vec3f &point);
   bool checkIfPointFree(const Vec3f &point);
@@ -194,6 +196,9 @@ private:
   double A_time_;                                  // Time of the starting point
   state E_;                                        // The goal point of actual trajectory
   state G_term_;                                   // Terminal goal
+  state social_hold_goal_;                         // Hold goal restored after social avoidance clears
+  bool social_hold_goal_valid_ = false;            // Flag for social hold goal validity
+  Eigen::Vector3d p_wait_ = Eigen::Vector3d::Zero(); // Wait/evasion anchor point for social avoidance
   std::deque<state> plan_;                         // Plan for the drone
   std::deque<std::vector<state>> plan_safe_paths_; // Indicate if the state has a safe path
   double previous_yaw_ = 0.0;                      // Previous yaw

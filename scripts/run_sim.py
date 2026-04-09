@@ -40,6 +40,7 @@ import sys
 import tempfile
 import yaml
 from pathlib import Path
+from typing import List
 
 
 def find_setup_bash(args_setup_bash: str = None) -> Path:
@@ -144,24 +145,27 @@ unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
     return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
 
 
-def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
+def generate_gazebo_yaml(setup_bash: Path, goals: List[tuple], sim_env: str,
                          env: str = 'hard_forest',
                          start_pos: tuple = (0, 0, 3.0), start_yaw: float = 1.57,
                          ros_domain_id: int = 7, use_rviz: bool = True,
                          use_gazebo_gui: bool = False, use_ground_robot: bool = False,
+                         use_ped_obstacles: bool = False,
                          no_goal: bool = False) -> str:
     """Generate YAML for single-agent Gazebo simulation."""
-    goal_x, goal_y, goal_z = goal
     start_x, start_y, start_z = start_pos
+
 
     panes = [
         # Base station with Gazebo
         {
             'shell_command': [
                 'source /usr/share/gazebo/setup.bash',
+                'source ~/code/decomp_ws/install/setup.bash',
                 f'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=false '
                 f'use_gazebo_gui:={str(use_gazebo_gui).lower()} use_rviz:={str(use_rviz).lower()} '
-                f'env:={env} use_ground_robot:={str(use_ground_robot).lower()}'
+                f'env:={env} use_ground_robot:={str(use_ground_robot).lower()} '
+                f'use_ped_obstacles:={str(use_ped_obstacles).lower()}'
             ]
         },
         # Ground robot odom-to-state converter (only for ground robot)
@@ -176,6 +180,7 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
         {
             'shell_command': [
                 'sleep 10',
+                'source ~/code/mighty_ws/install/setup.bash',
                 f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
                 f'param_file:={"global_mapper_ground_robot.yaml" if use_ground_robot else "global_mapper.yaml"}'
             ]
@@ -188,14 +193,29 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
                 f'sim_env:={sim_env} use_ground_robot:={str(use_ground_robot).lower()}'
             ]
         },
+        # MPC controller
+        {
+            'shell_command': [
+                'sleep 15',
+                'source /home/swarm/code/mighty_ws/install/setup.bash',
+                'ros2 launch mpc mpc.launch.py namespace:=/NX01 params_file:=/home/swarm/code/mighty_ws/src/mpc/config/mpc_sim.yaml hardware:=false'
+            ] if use_ground_robot else ['echo "Skipping MPC launch (not using ground robot)"']
+        },
+        # Static TF for MPC
+        {
+            'shell_command': [
+                    'sleep 15',
+                    'ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 1 map NX01/odom'
+                ] if use_ground_robot else [ 'echo "Skipping static transform publisher (not using ground robot)"' ]
+        }
     ]
 
     if not no_goal:
-        # Goal sender
+        goal_points = [list(g) for g in goals]
         panes.append({
             'shell_command': [
                 'sleep 20',
-                f"ros2 launch mighty goal_sender.launch.py list_agents:=\"['NX01']\" list_goals:=\"['[{goal_x}, {goal_y}, {goal_z}]']\""
+                f"ros2 launch mighty goal_monitor.launch.py goal_tolerance:=1.0 goal_points:=\"{goal_points}\""
             ]
         })
 
@@ -244,11 +264,11 @@ def main():
 
     parser.add_argument(
         '--goal', '-g',
+        action='append',
         type=float,
         nargs=3,
         metavar=('X', 'Y', 'Z'),
-        default=[105.0, 0.0, 3.0],
-        help='Goal position for gazebo mode (default: 105.0 0.0 3.0)'
+        help='List of goal positions. Can be specified multiple times (e.g., -g 1 2 3 -g 4 5 6)'
     )
 
     parser.add_argument(
@@ -291,8 +311,8 @@ def main():
     parser.add_argument(
         '--ros-domain-id',
         type=int,
-        default=20,
-        help='ROS_DOMAIN_ID (default: 20)'
+        default=10,
+        help='ROS_DOMAIN_ID (default: 10)'
     )
 
     parser.add_argument(
@@ -332,7 +352,16 @@ def main():
         help='Print the generated YAML without launching'
     )
 
+    parser.add_argument(
+        '--use-ped-obstacles',
+        action='store_true',
+        help='Include pedestrian obstacles in the Gazebo simulation'
+    )
+
     args = parser.parse_args()
+
+    if args.goal is None:
+        args.goal = [[105.0, 0.0, 3.0]]
 
     # Find setup.bash path
     setup_bash = find_setup_bash(args.setup_bash)
@@ -356,6 +385,12 @@ def main():
             'ACL_office': 'ACL_office',
             'easy_forest': 'easy_forest',
             'hard_forest': 'hard_forest',
+            'empty_corridor': 'empty_corridor',
+            'T_junction': 'T_junction',
+            'corridor_overtake': 'corridor_overtake',
+            'social_passing': 'social_passing',
+            'social_crossing': 'social_crossing',
+            'social_overtaking': 'social_overtaking',
         }
         world_name = env_to_world_mapping.get(args.env, args.env)
 
@@ -367,7 +402,7 @@ def main():
 
         yaml_content = generate_gazebo_yaml(
             setup_bash,
-            goal=tuple(args.goal),
+            goals=[tuple(g) for g in args.goal],
             sim_env=sim_env,
             env=world_name,
             start_pos=start_pos,
@@ -376,6 +411,7 @@ def main():
             use_rviz=use_rviz,
             use_gazebo_gui=args.gazebo_gui,
             use_ground_robot=use_ground_robot,
+            use_ped_obstacles=args.use_ped_obstacles,
             no_goal=args.no_goal
         )
         print(f"[INFO] Mode: Single-agent Gazebo simulation (sim_env={sim_env})")
@@ -383,7 +419,7 @@ def main():
         if use_ground_robot:
             print(f"[INFO] Vehicle: Ground robot (Pioneer 3-AT)")
         print(f"[INFO] Start: ({start_pos[0]}, {start_pos[1]}, {start_pos[2]})")
-        print(f"[INFO] Goal: ({args.goal[0]}, {args.goal[1]}, {args.goal[2]})")
+        print(f"[INFO] Goals: {args.goal}")
 
     if args.dry_run:
         print("\n[DRY RUN] Generated YAML:")

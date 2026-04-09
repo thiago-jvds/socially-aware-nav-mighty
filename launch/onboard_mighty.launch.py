@@ -109,8 +109,10 @@ def generate_launch_description():
 
         # Override with HW config if using hardware
         if use_hardware:
-            if robot_type in [RED_ROVER, STAR_ROBOT]:
+            if robot_type == RED_ROVER:
                 hw_config_filename = 'hw_mighty_rover.yaml'
+            elif robot_type == STAR_ROBOT:
+                hw_config_filename = 'hw_mighty_star_robot.yaml'
             else:  # quadrotor
                 hw_config_filename = 'hw_mighty.yaml'
             hw_parameters_path = os.path.join(get_package_share_directory('mighty'), 'config', hw_config_filename)

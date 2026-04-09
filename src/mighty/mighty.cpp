@@ -146,10 +146,28 @@ bool MIGHTY::needReplan(const state &local_state, const state &local_G_term, con
   double dist_to_term_G = (local_state.pos - local_G_term.pos).norm();
   double dist_from_last_plan_state_to_term_G = (last_plan_state.pos - local_G_term.pos).norm();
 
+  // Social avoidance: while monitoring at goal, keep replanning loop active.
+  if (par_.social_avoidance_enabled &&
+      (drone_status_ == DroneStatus::GOAL_REACHED || drone_status_ == DroneStatus::SOCIAL_AVOIDING))
+  {
+    return true;
+  }
+
   if (dist_to_term_G < par_.goal_radius)
   {
-    changeDroneStatus(DroneStatus::GOAL_REACHED);
-    return false;
+    if (par_.social_avoidance_enabled)
+    {
+      social_hold_goal_ = local_G_term;
+      social_hold_goal_valid_ = true;
+      p_wait_ = local_G_term.pos;
+      changeDroneStatus(DroneStatus::SOCIAL_AVOIDING);
+      return true;
+    }
+    else
+    {
+      changeDroneStatus(DroneStatus::GOAL_REACHED);
+      return false;
+    }
   }
 
   if (dist_to_term_G < par_.goal_seen_radius)
@@ -163,7 +181,8 @@ bool MIGHTY::needReplan(const state &local_state, const state &local_G_term, con
   }
 
   // Don't plan if drone is not traveling
-  if (drone_status_ == DroneStatus::GOAL_REACHED || (drone_status_ == DroneStatus::YAWING))
+  if (drone_status_ == DroneStatus::GOAL_REACHED || drone_status_ == DroneStatus::YAWING ||
+      drone_status_ == DroneStatus::SOCIAL_AVOIDING)
     return false;
 
   return true;
@@ -507,7 +526,9 @@ std::tuple<bool, bool> MIGHTY::replan(double last_replaning_computation_time, do
 
   // Check if we need to replan
   if (!checkReadyToReplan())
+  {
     return std::make_tuple(false, false);
+  }
 
   // Get states we need
   state local_state, local_G_term, last_plan_state;
@@ -518,6 +539,25 @@ std::tuple<bool, bool> MIGHTY::replan(double last_replaning_computation_time, do
   // Check if we need to replan based on the distance to the terminal goal
   if (!needReplan(local_state, local_G_term, last_plan_state))
     return std::make_tuple(false, false);
+
+  // Social avoidance:
+  // - Goal-monitor mode (GOAL_REACHED/SOCIAL_AVOIDING): blocking. If no action is needed, skip replanning.
+  // - Travel mode (TRAVELING/GOAL_SEEN): non-blocking. Override goal only if a collision threat is detected.
+  if (par_.social_avoidance_enabled)
+  {
+    const bool in_goal_monitor_mode =
+        (drone_status_ == DroneStatus::GOAL_REACHED || drone_status_ == DroneStatus::SOCIAL_AVOIDING);
+
+    if (in_goal_monitor_mode)
+    {
+      if (!checkSocialAvoidance(current_time))
+        return std::make_tuple(false, false);
+    }
+    else
+    {
+      (void)checkSocialAvoidance(current_time);
+    }
+  }
 
   if (par_.debug_verbose)
     printf("[TIMING] Housekeeping: %.2f ms\n", timer_housekeeping.getElapsedMicros() / 1000.0);
@@ -1497,6 +1537,22 @@ void MIGHTY::getDesiredYaw(state &next_goal)
     diff = desired_yaw - local_state.yaw;
     // std::cout << "diff1= " << diff << std::endl;
     break;
+  case DroneStatus::SOCIAL_AVOIDING:
+  {
+    // Face toward the hold position unless we are too close (atan2 becomes noisy).
+    double dx = p_wait_.x() - next_goal.pos[0];
+    double dy = p_wait_.y() - next_goal.pos[1];
+    double dist_xy = std::sqrt(dx * dx + dy * dy);
+    if (dist_xy < 0.3)
+    {
+      next_goal.yaw = previous_yaw_;
+      next_goal.dyaw = 0.0;
+      return;
+    }
+    desired_yaw = atan2(dy, dx);
+    diff = desired_yaw - previous_yaw_;
+    break;
+  }
   case DroneStatus::TRAVELING:
   case DroneStatus::GOAL_SEEN:
     desired_yaw = atan2(next_goal.pos[1] - local_state.pos.y(), next_goal.pos[0] - local_state.pos.x());
@@ -1584,6 +1640,9 @@ void MIGHTY::changeDroneStatus(int new_status)
   case DroneStatus::GOAL_REACHED:
     std::cout << bold << "status_=GOAL_REACHED" << reset;
     break;
+  case DroneStatus::SOCIAL_AVOIDING:
+    std::cout << bold << "status_=SOCIAL_AVOIDING" << reset;
+    break;
   }
 
   std::cout << " to ";
@@ -1601,6 +1660,9 @@ void MIGHTY::changeDroneStatus(int new_status)
     break;
   case DroneStatus::GOAL_REACHED:
     std::cout << bold << "status_=GOAL_REACHED" << reset;
+    break;
+  case DroneStatus::SOCIAL_AVOIDING:
+    std::cout << bold << "status_=SOCIAL_AVOIDING" << reset;
     break;
   }
 
@@ -1623,6 +1685,16 @@ bool MIGHTY::checkReadyToReplan()
                   (!par_.use_hardware || (kdtree_map_initialized_
                                           // && kdtree_unk_initialized_
                                           ));
+
+  if (par_.debug_verbose)
+  {
+    std::cout << "checkReadyToReplan: state_initialized_ = " << state_initialized_
+              << ", terminal_goal_initialized_ = " << terminal_goal_initialized_
+              << ", hgp_manager_.isMapInitialized() = " << hgp_manager_.isMapInitialized()
+              << ", kdtree_map_initialized_ = " << kdtree_map_initialized_
+              // << ", kdtree_unk_initialized_ = " << kdtree_unk_initialized_
+              << std::endl;
+  }
 
   return is_ready;
 }
@@ -1928,9 +2000,171 @@ void MIGHTY::applyInitiPoseInverseTransform(PieceWisePol &pwp)
  */
 bool MIGHTY::goalReachedCheck()
 {
-  if (checkReadyToReplan() && drone_status_ == DroneStatus::GOAL_REACHED)
+  if (checkReadyToReplan() &&
+      (drone_status_ == DroneStatus::GOAL_REACHED || drone_status_ == DroneStatus::SOCIAL_AVOIDING))
   {
     return true;
   }
+  return false;
+}
+
+// ----------------------------------------------------------------------------
+
+bool MIGHTY::checkSocialAvoidance(double current_time)
+{
+  state local_state;
+  getState(local_state);
+
+  state local_G_term;
+  getGterm(local_G_term);
+
+  auto local_trajs = getTrajs();
+
+  const double lookahead_window = 8.0; // [s]
+  const double lookahead_step = 0.5;   // [s]
+  const double d_trigger = par_.social_avoidance_d_trigger;
+
+  auto isPointThreatened = [&](const Eigen::Vector3d &pt, bool lookahead = true) -> bool {
+    for (const auto &traj : local_trajs)
+    {
+      if (!traj)
+        continue;
+
+      Eigen::Vector3d p_now = traj->eval(current_time);
+      if ((pt - p_now).norm() < d_trigger)
+        return true;
+
+      if (!lookahead)
+        continue;
+
+      double max_tau = lookahead_window;
+      if (traj->mode == dynTraj::Mode::Piecewise && !traj->pwp.times.empty())
+      {
+        max_tau = std::min(max_tau, std::max(0.0, traj->pwp.times.back() - current_time));
+      }
+
+      for (double tau = lookahead_step; tau <= max_tau; tau += lookahead_step)
+      {
+        Eigen::Vector3d p_pred = traj->eval(current_time + tau);
+        if ((pt - p_pred).norm() < d_trigger)
+          return true;
+      }
+    }
+    return false;
+  };
+
+  Eigen::Vector3d n_total = Eigen::Vector3d::Zero();
+  for (const auto &traj : local_trajs)
+  {
+    if (!traj)
+      continue;
+
+    Eigen::Vector3d p_obs = traj->eval(current_time);
+    Eigen::Vector3d r_i = local_state.pos - p_obs;
+    double dist_i = r_i.norm();
+
+    if (dist_i < d_trigger && dist_i > 1e-6)
+    {
+      n_total += r_i.normalized() / (dist_i + 1e-3);
+    }
+  }
+
+  if (n_total.norm() > par_.social_avoidance_min_repulsion_norm)
+  {
+    if (drone_status_ != DroneStatus::SOCIAL_AVOIDING)
+    {
+      social_hold_goal_ = local_G_term;
+      social_hold_goal_valid_ = true;
+      p_wait_ = local_G_term.pos;
+      changeDroneStatus(DroneStatus::SOCIAL_AVOIDING);
+    }
+
+    Eigen::Vector3d direction(std::cos(previous_yaw_), std::sin(previous_yaw_), 0.0);
+
+    Eigen::Vector3d p_evasion;
+    p_evasion[2] = local_state.pos[2];
+    auto is_occupied = [&](const Eigen::Vector3d &p) {
+      return checkIfPointOccupied(Vec3f(p[0], p[1], p[2]));
+    };
+
+    bool force_halt = false;
+
+    const std::array<double, 7> angle_offsets = {
+        M_PI / 6.0, -M_PI / 6.0, // +30, -30
+        M_PI / 3.0, -M_PI / 3.0, // +60, -60
+        M_PI / 2.0, -M_PI / 2.0, // +90, -90
+        M_PI,
+    };
+    bool found_safe = false;
+    for (double a : angle_offsets)
+    {
+      Eigen::Vector3d cand_dir(direction[0] * std::cos(a) - direction[1] * std::sin(a),
+                               direction[0] * std::sin(a) + direction[1] * std::cos(a), 0.0);
+      if (cand_dir.norm() < 1e-6)
+        continue;
+      cand_dir.normalize();
+
+      Eigen::Vector3d cand = local_state.pos + par_.social_avoidance_h * cand_dir;
+      cand[2] = local_state.pos[2];
+
+      if (!isPointThreatened(cand, true) && !is_occupied(cand))
+      {
+        p_evasion = cand;
+        found_safe = true;
+        std::cout << "[social_avoidance] Safe evasion point found at angle: " << a * 180.0 / M_PI << " degrees" << std::endl;
+        break;
+      }
+    }
+
+    if (!found_safe)
+    {
+      std::cout << "[social_avoidance] No safe evasion point found, forcing halt" << std::endl;
+      p_evasion = local_state.pos;
+      force_halt = true;
+    }
+
+    if (force_halt)
+    {
+      state halt_goal = local_state;
+      halt_goal.vel.setZero();
+      halt_goal.accel.setZero();
+      halt_goal.jerk.setZero();
+      setGterm(halt_goal);
+
+      std::lock_guard<std::mutex> lock(mtx_G_);
+      G_.pos = local_state.pos;
+    }
+    else
+    {
+      state evasion_goal;
+      evasion_goal.setPos(p_evasion.x(), p_evasion.y(), p_evasion.z());
+      setGterm(evasion_goal);
+
+      std::lock_guard<std::mutex> lock(mtx_G_);
+      G_.pos = mighty_utils::projectPointToSphere(local_state.pos, p_evasion, par_.horizon);
+    }
+
+    return true;
+  }
+  else if (drone_status_ == DroneStatus::SOCIAL_AVOIDING)
+  {
+    if (!social_hold_goal_valid_)
+      return false;
+
+    if (isPointThreatened(p_wait_, false))
+      return false;
+
+    setGterm(social_hold_goal_);
+    {
+      std::lock_guard<std::mutex> lock(mtx_G_);
+      G_.pos = mighty_utils::projectPointToSphere(local_state.pos, social_hold_goal_.pos,
+                                                  par_.horizon);
+    }
+    std::cout << "[social_avoidance] restoring_hold_goal=(" << social_hold_goal_.pos.x()
+              << ", " << social_hold_goal_.pos.y() << ", "
+              << social_hold_goal_.pos.z() << ")" << std::endl;
+    return true;
+  }
+
   return false;
 }

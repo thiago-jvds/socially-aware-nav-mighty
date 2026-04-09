@@ -122,6 +122,7 @@ struct parameters
   bool use_heat_map{false};
   float heat_weight{1.0f};
   bool dynamic_heat_enabled{false};
+  bool dynamic_heat_use_social{false};
   bool dynamic_as_occupied_current{true};
   bool dynamic_as_occupied_future{false};
   float heat_alpha0{1.0f};
@@ -134,6 +135,15 @@ struct parameters
   float obst_max_vel{1.0f};
   float dyn_base_inflation_m{0.5f};
   float dyn_heat_tube_radius_m{2.0f};
+  float social_heat_A0{30.0f};
+  float social_heat_dA{0.8f};
+  float social_heat_sigma_x0{2.0f};
+  float social_heat_sigma_y0{1.0f};
+  float social_heat_d_sigma{0.25f};
+  float social_heat_d_r0{0.06f};
+  float social_heat_robot_radius_m{0.0f};
+  float social_heat_delta_x{0.2f};
+  float social_heat_delta_y{0.15f};
   int heat_num_samples{15};
   bool static_heat_enabled{false};
   float static_heat_alpha{2.0f};
@@ -225,6 +235,12 @@ struct parameters
 
   // Dynamic obstacles parameters
   double traj_lifetime;
+
+  // Social avoidance parameters
+  bool social_avoidance_enabled{false};
+  double social_avoidance_d_trigger{1.0};
+  double social_avoidance_min_repulsion_norm{0.1};
+  double social_avoidance_h{1.0};
 
   // Dynamic k_value parameters
   int num_replanning_before_adapt;
@@ -1035,7 +1051,8 @@ struct dynTraj
   } mode{Mode::Analytic};
 
   // --- piecewise quintic branch ---
-  PieceWiseQuinticPol pwp;
+  PieceWiseQuinticPol quintic_pwp;
+  PieceWisePol pwp;
 
   // --- single‐segment quintic branch ---
   double poly_start_time = 0.0;
@@ -1063,6 +1080,9 @@ struct dynTraj
   double time_received = 0.0;
   double tracking_utility = 0.0;
   double communication_delay = 0.0;
+
+  // IMM data
+  Eigen::Vector3d mu;
 
   dynTraj() = default;
 
@@ -1101,7 +1121,7 @@ struct dynTraj
   inline void setPiecewise(const PieceWiseQuinticPol &poly)
   {
     mode = Mode::Piecewise;
-    pwp = poly;
+    quintic_pwp = poly;
   }
 
   bool compileAnalytic()
