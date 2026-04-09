@@ -23,8 +23,14 @@ class RepubGoalNode(Node):
         # Get rover name
         self.namespace = self.get_namespace().strip('/')
         self.get_logger().info(f"Namespace: {self.namespace}")
-        vehtype = os.getenv("VEHTYPE", default = None)
-        vehnum = os.getenv("VEHNUM", default = None)
+        vehtype = os.getenv("VEHTYPE", default=None)
+        vehnum = os.getenv("VEHNUM", default=None)
+        if vehtype is None:
+            self.get_logger().error("VEHTYPE environment variable not set, defaulting to 'NX'")
+            vehtype = "NX"
+        if vehnum is None:
+            self.get_logger().error("VEHNUM environment variable not set, defaulting to '01'")
+            vehnum = "01"
         self.rover_name = vehtype + vehnum
 
         # Publishers and Subscribers

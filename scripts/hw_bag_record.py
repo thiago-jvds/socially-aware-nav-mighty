@@ -1,9 +1,17 @@
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 import os
 import subprocess
 import argparse
 
 def record_ros2_bag(bag_name, bag_path, agents, topics=None):
-    
+
     # Define the topics template that is common across all agents
     base_topics = [
         "/agent_initial_guess_pos",
@@ -34,20 +42,40 @@ def record_ros2_bag(bag_name, bag_path, agents, topics=None):
         "/traj",
         "/traj_committed_colored",
         "/mid360_PointCloud2",
-        "/d435/color/image_raw",
-        "/d435/color/image_raw/compressed",
-        "/d435/depth/color/points",
-        "/d435/depth/image_raw",
-        # "/d435/depth/image_raw/compressed",
-        # "/d435/depth/image_raw/compressedDepth",
-        "/d435/color/camera_info",
-        "/d435/depth/camera_info",
+        # "/d455/color/image_raw",
+        # "/d455/color/image_raw/compressed",
+        # "/d455/depth/color/points",
+        # "/d455/depth/image_raw",
+        # "/d455/depth/image_raw/compressed",
+        # "/d455/depth/image_raw/compressedDepth",
+        "/d455/color/camera_info",
+        # "/d455/depth/camera_info",
         "/dynamic_map_marker",
         "/actual_traj",
         "/tracked_obstacles",
         "/cluster_bounding_boxes",
         "/yaw_output",
         "/predicted_trajs",
+        "/heat_cloud",
+        "/original_hgp_path_marker",
+        "/hgp_path_marker",
+        "/poly_whole",
+        "/traj_subopt_colored",
+        "/hover_avoidance_viz",
+        "/point_E",
+        "/point_A",
+        "/livox/lidar",
+        "/free_grid",
+        "/unknown_grid",
+        "/occupancy_grid",
+        "/dynamic_grid",
+        "/ground_2d_occupied",
+        "/ground_2d_heat",
+        "/vel_text",
+        "/fov",
+        "/uncertainty_spheres",
+        "/dlio/odom_node/pose",
+        "/frame_align/viz/pose_array"
     ]
 
     # Static topics (not agent-specific)
@@ -63,7 +91,8 @@ def record_ros2_bag(bag_name, bag_path, agents, topics=None):
         "/trajs",
         "/rosout",
         "/tf",
-        "/tf_static"
+        "/tf_static",
+        "/map_generator/global_cloud",
     ]
     
     # Generate topics for all agents
@@ -71,6 +100,16 @@ def record_ros2_bag(bag_name, bag_path, agents, topics=None):
     for agent in agents:
         for topic in base_topics:
             all_topics.append(f"/{agent}{topic}")
+
+    # hardware d455
+    all_topics.append(f"{agent}/{agent}_d455/color/image_raw/compressed")
+
+    # frame alginemnt 
+    other_agents = ["RR03", "RR04", "RR05", "RR06", "RR08"]
+    for oa in other_agents:
+        if oa != agent:
+            all_topics.append(f"/frame_align/{agent}/{oa}")
+            all_topics.append(f"/frame_align/{oa}/{agent}")
 
     # Add static topics (non-agent-specific topics)
     all_topics.extend(static_topics)
@@ -95,15 +134,19 @@ if __name__ == "__main__":
     # Create arguments for record_ros2_bag
     parser = argparse.ArgumentParser(description="Record a ROS2 bag")
     parser.add_argument("--bag_number", type=int, help="Bag number to record")
+    parser.add_argument("--bag_name", type=str, help="Custom bag name (overrides --bag_number)", default=None)
     # parser.add_argument("--bag_path", type=str, help="Path to save the bag", default="/media/kkondo/T7/dynus/sim/multiagent")
     parser.add_argument("--bag_path", type=str, help="Path to save the bag", default="/home/swarm/data/dynus")
     # parser.add_argument("--agents", nargs="+", help="List of agents to record", default=["NX01", "NX02", "NX03"])
-    parser.add_argument("--agents", nargs="+", help="List of agents to record", default=["BD01"])
+    parser.add_argument("--agents", nargs="+", help="List of agents to record", default=["RR06"])
     args = parser.parse_args()
 
     # Customize bag name and path as needed
-    # bag_name = "num_" + str(args.bag_number)
-    bag_name = "hw_" + str(args.bag_number)
+    if args.bag_name:
+        bag_name = args.bag_name
+    else:
+        # bag_name = "num_" + str(args.bag_number)
+        bag_name = "hw_" + str(args.bag_number)
     bag_path = args.bag_path
 
     # Convert string list (eg. "['NX01', 'NX02']") to list (eg. ['NX01', 'NX02'])

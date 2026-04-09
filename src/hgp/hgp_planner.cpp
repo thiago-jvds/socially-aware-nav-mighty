@@ -166,7 +166,8 @@ vec_Vecf<3> HGPPlanner::removeCornerPts(const vec_Vecf<3>& path) {
                                 double* peak_heat_out) -> double {
     if (peak_heat_out) *peak_heat_out = 0.0;
 
-    if (!map_util_ || !lineOfSightCapsule(a, b, los_cells_)) return std::numeric_limits<decimal_t>::infinity();
+    if (!map_util_ || !lineOfSightCapsule(a, b, los_cells_))
+      return std::numeric_limits<decimal_t>::infinity();
 
     const Vecf<3> d = b - a;
     const double L = (double)d.norm();
@@ -404,12 +405,17 @@ bool HGPPlanner::plan(const Vecf<3>& start, const Vecf<3>& start_vel, const Vecf
     cMap_for_search = (map_util_->map_).data();
   }
 
-  graph_search_ = std::make_shared<mighty::GraphSearch>(cMap_for_search, map_util_, dim(0),
-                                                       dim(1), zDim_for_search, eps, planner_verbose_,
-                                                       global_planner_, w_unknown_);
+  graph_search_ = std::make_shared<mighty::GraphSearch>(cMap_for_search, map_util_, dim(0), dim(1),
+                                                        zDim_for_search, eps, planner_verbose_,
+                                                        global_planner_, w_unknown_);
   graph_search_->setStartAndGoal(start, goal);
   double max_values[3] = {v_max_, a_max_, j_max_};
   graph_search_->setBounds(max_values);
+
+  // Pass ESDF grid for ground robot A* cost
+  if (esdf_grid_ && is_2d_mode_) {
+    graph_search_->setEsdfGrid(esdf_grid_, esdf_weight_astar_, esdf_d_safe_astar_);
+  }
 
   // In 2D mode, force start/goal z to 0
   const int sz = is_2d_mode_ ? 0 : start_int(2);
@@ -417,10 +423,10 @@ bool HGPPlanner::plan(const Vecf<3>& start, const Vecf<3>& start_vel, const Vecf
 
   // Run global plan module
   int max_expand = max_expand_;
-  graph_search_->plan(start_int(0), start_int(1), sz, goal_int(0), goal_int(1),
-                      gz, initial_g, global_planning_time_, hgp_static_jps_time_,
-                      hgp_check_path_time_, hgp_dynamic_astar_time_, hgp_recover_path_time_,
-                      current_time, start_vel, max_expand, hgp_timeout_duration_ms_);
+  graph_search_->plan(start_int(0), start_int(1), sz, goal_int(0), goal_int(1), gz, initial_g,
+                      global_planning_time_, hgp_static_jps_time_, hgp_check_path_time_,
+                      hgp_dynamic_astar_time_, hgp_recover_path_time_, current_time, start_vel,
+                      max_expand, hgp_timeout_duration_ms_);
 
   const auto path = graph_search_->getPath();
 
@@ -457,11 +463,26 @@ bool HGPPlanner::plan(const Vecf<3>& start, const Vecf<3>& start_vel, const Vecf
     // Heat-aware Laplacian smoothing (moves waypoints, doesn't remove them)
     path_ = smoothPathHeatAware(raw_path_, smooth_iterations_, smooth_alpha_);
   } else if (is_2d_mode_) {
-    // In 2D mode, skip 3D LoS shortcutting (it uses the 3D map which has ground points).
-    // Just do basic path cleanup.
-    auto tmp = raw_path_;
-    cleanUpPath(tmp);
-    path_ = tmp;
+    // 2D mode: sample points from raw A* path such that consecutive waypoints
+    // never exceed max_dist_vertexes_2d_. No smoothing or LoS.
+    if (raw_path_.size() >= 2 && max_dist_vertexes_2d_ > 0.0) {
+      path_.clear();
+      path_.push_back(raw_path_.front());
+      double accum_dist = 0.0;
+      for (size_t i = 1; i < raw_path_.size(); ++i) {
+        accum_dist += (raw_path_[i] - raw_path_[i - 1]).norm();
+        if (accum_dist >= max_dist_vertexes_2d_) {
+          path_.push_back(raw_path_[i]);
+          accum_dist = 0.0;
+        }
+      }
+      // Always include the last point
+      if ((path_.back() - raw_path_.back()).norm() > 1e-6) {
+        path_.push_back(raw_path_.back());
+      }
+    } else {
+      path_ = raw_path_;
+    }
   } else if (global_planner_ == "sjps" || global_planner_ == "sastar") {
     // 1) coarse LoS shortcut with inflation
     path_ = shortCutByLoS(raw_path_, los_cells_);
@@ -497,12 +518,12 @@ void HGPPlanner::cleanUpPath(vec_Vecf<3>& path) {
   std::reverse(std::begin(path), std::end(path));
 }
 
-vec_Vecf<3> HGPPlanner::smoothPathHeatAware(const vec_Vecf<3>& path,
-                                             int iterations, double alpha) const {
+vec_Vecf<3> HGPPlanner::smoothPathHeatAware(const vec_Vecf<3>& path, int iterations,
+                                            double alpha) const {
   if (path.size() < 3 || !map_util_) return path;
 
   const bool heat_on = (map_util_->dynamicHeatEnabled() || map_util_->staticHeatEnabled()) &&
-                        map_util_->getHeatWeight() > 0.0f;
+                       map_util_->getHeatWeight() > 0.0f;
   const bool has_2d = map_util_->has2DMap();
 
   vec_Vecf<3> smoothed = path;
@@ -526,9 +547,9 @@ vec_Vecf<3> HGPPlanner::smoothPathHeatAware(const vec_Vecf<3>& path,
         Veci<3> oi = map_util_->floatToInt(smoothed[i]);
         Veci<3> ci = map_util_->floatToInt(candidate);
         float h_old = is_2d_mode_ ? map_util_->getHeat2D(oi(0), oi(1))
-                                   : map_util_->getHeat(oi(0), oi(1), oi(2));
+                                  : map_util_->getHeat(oi(0), oi(1), oi(2));
         float h_new = is_2d_mode_ ? map_util_->getHeat2D(ci(0), ci(1))
-                                   : map_util_->getHeat(ci(0), ci(1), ci(2));
+                                  : map_util_->getHeat(ci(0), ci(1), ci(2));
         if (h_new > h_old * 1.1 + 0.01) continue;
       }
 

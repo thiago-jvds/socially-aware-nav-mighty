@@ -23,7 +23,8 @@ void HGPManager::setParameters(const parameters& par) {
   // Get the parameter
   par_ = par;
 
-  // Set the 2D ground robot flag (build 2D map for any ground robot, use_2d_planning controls A* mode)
+  // Set the 2D ground robot flag (build 2D map for any ground robot, use_2d_planning controls A*
+  // mode)
   is_ground_robot_ = (par.vehicle_type == "ground_robot");
 
   // Set the parameters
@@ -39,8 +40,8 @@ void HGPManager::setParameters(const parameters& par) {
 
   // shared pointer to the map util for actual planning
   map_util_ = std::make_shared<mighty::VoxelMapUtil>(par.factor_hgp * par.res, par.x_min, par.x_max,
-                                                    par.y_min, par.y_max, par.z_min, par.z_max,
-                                                    par.inflation_hgp, par.obst_max_vel);
+                                                     par.y_min, par.y_max, par.z_min, par.z_max,
+                                                     par.inflation_hgp, par.obst_max_vel);
 
   // ---------------- Global-planner configuration: YAML-driven heat map parameters ----------------
 
@@ -139,12 +140,21 @@ void HGPManager::setupHGPPlanner(const std::string& global_planner, bool global_
   // Enable 2D A* mode only when use_2d_planning is on
   planner_ptr_->set2DMode(is_ground_robot_ && par_.use_2d_planning);
 
+  // Pass ESDF grid for ground robot A* cost
+  if (is_ground_robot_ && esdf_grid_) {
+    planner_ptr_->setEsdfGrid(esdf_grid_, esdf_weight_astar_, esdf_d_safe_astar_);
+  }
+
   // Path smoothing configuration
   planner_ptr_->setDisableAllSmoothing(par_.disable_all_smoothing);
   planner_ptr_->setSkipPathSmoothing(par_.skip_path_smoothing);
   planner_ptr_->setSmoothParams(par_.smooth_iterations, par_.smooth_alpha);
 
-  // NOTE: map_util_for_planning_ is copied in solveHGP() — no need to copy it here too
+  // Copy map_util_ for planning (freeStart/freeGoal need it before solveHGP)
+  {
+    std::lock_guard<std::mutex> lock(mtx_map_util_);
+    map_util_for_planning_ = std::make_shared<mighty::VoxelMapUtil>(*map_util_);
+  }
 }
 
 void HGPManager::updateVmax(double v_max) {
@@ -251,12 +261,10 @@ inline void collapseIntoLongSegments(const mighty::VoxelMapUtil& map, double res
 bool HGPManager::solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const Vec3f& goal_sent,
                           double& final_g, double weight, double current_time, vec_Vecf<3>& path,
                           vec_Vecf<3>& raw_path) {
-  {
-    std::lock_guard<std::mutex> lock(mtx_map_util_);
-    map_util_for_planning_ = std::make_shared<mighty::VoxelMapUtil>(*map_util_);
-  }
+  // map_util_for_planning_ was already copied in setupHGPPlanner() and modified by
+  // freeStart/freeGoal — do NOT re-copy here or those freeings are lost.
 
-  // Set start and goal — in 2D mode, force z=0 for the search reference plane
+  // Set start and goal — in 2D mode, force z to default_goal_z for the search reference plane
   Vec3f start_for_search = start_sent;
   Vec3f goal_for_search = goal_sent;
   if (is_ground_robot_) {
@@ -264,7 +272,6 @@ bool HGPManager::solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const
     goal_for_search(2) = static_cast<float>(par_.default_goal_z);
 
     // Free start/goal in the 2D map — ground points would otherwise block them.
-    // (freeStart/freeGoal ran on the previous map_util_for_planning_ which we just overwrote)
     if (map_util_for_planning_->has2DMap()) {
       Veci<3> si = map_util_for_planning_->floatToInt(start_for_search);
       map_util_for_planning_->free2DCell(si(0), si(1), 2.0f * res_);
@@ -293,8 +300,10 @@ bool HGPManager::solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const
     raw_path = planner_ptr_->getRawPath();
   }
 
-  // Resample path at uniform arc-length intervals
-  mighty_utils::resamplePathUniform(path, max_dist_vertexes_);
+  // Resample path at uniform arc-length intervals (skip for 2D ground robot — already done in planner)
+  if (!is_ground_robot_) {
+    mighty_utils::resamplePathUniform(path, max_dist_vertexes_);
+  }
 
   // For ground robots, trim the path at the first non-free waypoint (using 2D map)
   if (is_ground_robot_ && map_util_for_planning_->has2DMap() && path.size() > 1) {
@@ -463,8 +472,8 @@ bool HGPManager::cvxEllipsoidDecomp(EllipsoidDecomp3D& ellip, const vec_Vecf<3>&
   // When sfc_use_unknown_as_obstacle is true, use the 2D map (which merges unknown+occupied).
   // When false, project the caller-provided base_uo (occupied-only 3D points) to z=0.
   vec_Vec3f base_uo_2d;
-  if (is_ground_robot_ && par_.sfc_use_unknown_as_obstacle &&
-      map_util_for_planning_ && map_util_for_planning_->has2DMap()) {
+  if (is_ground_robot_ && par_.sfc_use_unknown_as_obstacle && map_util_for_planning_ &&
+      map_util_for_planning_->has2DMap()) {
     int dimX, dimY;
     map_util_for_planning_->get2DDimensions(dimX, dimY);
     const auto origin = map_util_for_planning_->getOrigin();
@@ -490,7 +499,7 @@ bool HGPManager::cvxEllipsoidDecomp(EllipsoidDecomp3D& ellip, const vec_Vecf<3>&
     for (float fx = x_lo; fx <= x_hi; fx += floor_step) {
       for (float fy = y_lo; fy <= y_hi; fy += floor_step) {
         base_uo_2d.emplace_back(Vec3f(fx, fy, -slab_margin));
-        base_uo_2d.emplace_back(Vec3f(fx, fy,  slab_margin));
+        base_uo_2d.emplace_back(Vec3f(fx, fy, slab_margin));
       }
     }
   } else if (is_ground_robot_ && map_util_for_planning_) {
@@ -508,7 +517,7 @@ bool HGPManager::cvxEllipsoidDecomp(EllipsoidDecomp3D& ellip, const vec_Vecf<3>&
     for (float fx = x_lo; fx <= x_hi; fx += floor_step) {
       for (float fy = y_lo; fy <= y_hi; fy += floor_step) {
         base_uo_2d.emplace_back(Vec3f(fx, fy, -slab_margin));
-        base_uo_2d.emplace_back(Vec3f(fx, fy,  slab_margin));
+        base_uo_2d.emplace_back(Vec3f(fx, fy, slab_margin));
       }
     }
   }
@@ -618,8 +627,8 @@ bool HGPManager::cvxEllipsoidDecompTimeLayered(
 
   // For 2D mode: build a projected obstacle set (reused across time layers)
   vec_Vec3f base_uo_2d_tl;
-  if (is_ground_robot_ && par_.sfc_use_unknown_as_obstacle &&
-      map_util_for_planning_ && map_util_for_planning_->has2DMap()) {
+  if (is_ground_robot_ && par_.sfc_use_unknown_as_obstacle && map_util_for_planning_ &&
+      map_util_for_planning_->has2DMap()) {
     int dimX, dimY;
     map_util_for_planning_->get2DDimensions(dimX, dimY);
     const auto origin = map_util_for_planning_->getOrigin();
@@ -640,7 +649,7 @@ bool HGPManager::cvxEllipsoidDecompTimeLayered(
     for (float fx = x_lo; fx <= x_hi; fx += floor_step) {
       for (float fy = y_lo; fy <= y_hi; fy += floor_step) {
         base_uo_2d_tl.emplace_back(Vec3f(fx, fy, -slab_margin_tl));
-        base_uo_2d_tl.emplace_back(Vec3f(fx, fy,  slab_margin_tl));
+        base_uo_2d_tl.emplace_back(Vec3f(fx, fy, slab_margin_tl));
       }
     }
   } else if (is_ground_robot_ && map_util_for_planning_) {
@@ -657,7 +666,7 @@ bool HGPManager::cvxEllipsoidDecompTimeLayered(
     for (float fx = x_lo; fx <= x_hi; fx += floor_step) {
       for (float fy = y_lo; fy <= y_hi; fy += floor_step) {
         base_uo_2d_tl.emplace_back(Vec3f(fx, fy, -slab_margin_tl));
-        base_uo_2d_tl.emplace_back(Vec3f(fx, fy,  slab_margin_tl));
+        base_uo_2d_tl.emplace_back(Vec3f(fx, fy, slab_margin_tl));
       }
     }
   }
@@ -1194,18 +1203,29 @@ void HGPManager::updateMap(double wdx, double wdy, double wdz, const Vec3f& cent
   auto start_time = std::chrono::high_resolution_clock::now();
 
   mtx_map_util_.lock();
-  map_util_->readMap(pclptr, pclptr_unk, (int)(wdx / res_), (int)(wdy / res_), (int)(wdz / res_),
-                     center_map, par_.z_min, par_.z_max, par_.inflation_hgp, obst_pos, obst_bbox,
-                     traj_max_time);
+  // Use round (not truncation) so wdz==res_ reliably gives ≥1 cell despite
+  // floating-point rep of values like 0.15. Floor for x/y was already safe in
+  // practice (windows are large) but rounding is more robust there too.
+  map_util_->readMap(pclptr, pclptr_unk, std::max(1, (int)std::lround(wdx / res_)),
+                     std::max(1, (int)std::lround(wdy / res_)),
+                     std::max(1, (int)std::lround(wdz / res_)), center_map, par_.z_min, par_.z_max,
+                     par_.inflation_hgp, obst_pos, obst_bbox, traj_max_time);
 
-  // Build 2D ground robot map if enabled
+  // Build 2D ground robot map
   if (is_ground_robot_) {
-    map_util_->buildGroundMap2D(
-        static_cast<float>(par_.obstacle_min_height),
-        static_cast<float>(par_.terrain_cost_weight),
-        par_.terrain_cost_mode,
-        par_.use_column_any_occupied,
-        static_cast<float>(par_.column_min_z));
+    if (occ_grid_2d_) {
+      // Occ2D mode: binary occupancy from mapper + BFS distance-based heat ramp. No inflation.
+      map_util_->buildMap2DFromOcc2D(*occ_grid_2d_, esdf_d_safe_astar_, par_.static_heat_Hmax);
+    } else if (esdf_grid_) {
+      // ESDF fallback
+      map_util_->buildMap2DFromEsdf(*esdf_grid_, esdf_d_safe_astar_, par_.static_heat_Hmax);
+    } else {
+      // Final fallback: 3D point cloud projection
+      map_util_->buildGroundMap2D(static_cast<float>(par_.obstacle_min_height),
+                                  static_cast<float>(par_.terrain_cost_weight),
+                                  par_.terrain_cost_mode, par_.use_column_any_occupied,
+                                  static_cast<float>(par_.column_min_z));
+    }
   }
   mtx_map_util_.unlock();
 

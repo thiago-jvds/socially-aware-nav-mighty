@@ -47,9 +47,9 @@ RUN apt install -y  ros-${ROS_DISTRO}-desktop \
 # Install MIGHTY and dependencies
 ##########################################
 # Version control: commits from mighty.repos
-ARG MIGHTY_VERSION=6237c6524df309e50e34b5501cbef70b2e1c6d80
+ARG MIGHTY_VERSION=d1fedda5c0591ed29456f77cdde8edea8010cd63
 ARG ACL_MAPPING_VERSION=c3b27af1549ef1ab549acbe1143bf810a900da95
-ARG DYNUS_INTERFACES_VERSION=ec381d5efeaaa5d25c73a3453d4dc78d59a6594c
+ARG DYNUS_INTERFACES_VERSION=c43bcec6d4b67c6f8a8baabb1b2f8c1ba8b919d1
 ARG GAZEBO_ROS_PKGS_VERSION=ed1f7b886971d7bf898e6e0f59c622df929c0521
 ARG LIVOX_LASER_SIM_VERSION=246040d802ec2d7374f38ffd07e5e7fc49e297fb
 ARG REALSENSE_GAZEBO_VERSION=8c357e69da2160f54328db70915bd9b28eb975bf
@@ -92,6 +92,10 @@ RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git && \
 
 # Build the workspace
 ##########################################
+# For Mac (amd64 emulation), limit parallelism to avoid OOM:
+#   docker build --build-arg JOBS=4 ...
+ARG JOBS=""
+
 ### for decomp
 WORKDIR /home/kkondo/code/decomp_ws
 RUN . /opt/ros/humble/setup.sh && colcon build --packages-select decomp_util
@@ -101,7 +105,7 @@ RUN . /home/kkondo/code/decomp_ws/install/setup.sh && colcon build --cmake-args 
 WORKDIR /home/kkondo/code/Livox-SDK2
 RUN mkdir build
 WORKDIR /home/kkondo/code/Livox-SDK2/build
-RUN cmake .. && make -j && sudo make install
+RUN cmake .. && make -j${JOBS} && sudo make install
 
 ### for livox_ros_driver2
 WORKDIR /home/kkondo/code/livox_ws/src/livox_ros_driver2
@@ -111,7 +115,9 @@ RUN . /opt/ros/humble/setup.sh && ./build.sh humble
 WORKDIR /home/kkondo/code/mighty_ws
 RUN . /opt/ros/humble/setup.sh && \
     . /home/kkondo/code/decomp_ws/install/setup.sh && \
-    export CMAKE_PREFIX_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2:/home/kkondo/code/decomp_ws/install/decomp_util && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+    export CMAKE_PREFIX_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2:/home/kkondo/code/decomp_ws/install/decomp_util && \
+    export MAKEFLAGS="-j${JOBS:-$(nproc)}" && \
+    colcon build ${JOBS:+--parallel-workers $JOBS} --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Gazebo
 ##########################################
@@ -122,7 +128,7 @@ RUN echo    'pcm.!default { \
             }' >> /usr/share/alsa/alsa.conf
 
 # For livox lidar
-ENV LD_LIBRARY_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2/lib:${LD_LIBRARY_PATH}:/usr/local/lib:/usr/local/include
+ENV LD_LIBRARY_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2/lib:/usr/local/lib:/usr/local/include
 
 # Alias
 RUN echo 'alias tks="tmux kill-server"' >> ~/.bashrc
@@ -139,6 +145,16 @@ RUN echo 'alias cbsl="roscd && colcon build --symlink-install && sb"' >> ~/.bash
 RUN echo 'alias cbps="roscd && colcon build --packages-select"' >> ~/.bashrc
 RUN echo 'alias tf_visualize="ros2 run rqt_tf_tree rqt_tf_tree"' >> ~/.bashrc
 RUN echo 'alias tks="tmux kill-server"' >> ~/.bashrc
+
+# macOS visualization support
+##########################################
+# Xpra: forwards individual windows efficiently (recommended for Mac)
+# Foxglove: web-based topic viewer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xpra xvfb libgl1-mesa-glx libgl1-mesa-dri \
+    ros-${ROS_DISTRO}-foxglove-bridge \
+    psmisc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set up Entry Point
 # ##########################################

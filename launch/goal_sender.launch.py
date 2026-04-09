@@ -40,15 +40,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'list_agents',
             default_value="['NX01', 'NX02', 'NX03', 'NX04', 'NX05']",
-            # default_value="['NX01', 'NX02']",
             description='List of agent names'
         ),
         DeclareLaunchArgument(
             'list_goals',
-            # default_value="['[50.0, 20.0, 0.0]', '[50.0, 10.0, 0.0]', '[50.0, 0.0, 0.0]', '[50.0, -10.0, 0.0]', '[50.0, -20.0, 0.0]']",
             default_value="['[50.0, -30.0, 0.0]', '[50.0, -15.0, 0.0]', '[50.0, 0.0, 0.0]', '[50.0, 15.0, 0.0]', '[50.0, 30.0, 0.0]']",
-            # default_value="['[35.0, 20.0, 0.0]', '[35.0, 10.0, 0.0]', '[35.0, 0.0, 0.0]', '[35.0, -10.0, 0.0]', '[35.0, -20.0, 0.0]']",
-            # default_value="['[5.0, 0.0, 2.0]', '[-5.0, 0.0, 2.0]']",
             description='List of goal coordinates'
         ),
         DeclareLaunchArgument(

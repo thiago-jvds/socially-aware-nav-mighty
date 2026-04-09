@@ -12,7 +12,7 @@ aluminum peripherial evaluation case.
   <!--File includes-->
   <xacro:include filename="$(find mighty)/urdf/_d435.gazebo.xacro"/>
 
-  <xacro:macro name="sensor_d435" params="name:=camera topics_ns range_max_depth parent *origin publish_pointcloud:=true">
+  <xacro:macro name="sensor_d435" params="name:=camera topics_ns range_max_depth parent *origin publish_pointcloud:=true color_sensor_rate:=50 depth_sensor_rate:=100 depth_plugin_rate:=30.0 color_plugin_rate:=100.0">
     <xacro:property name="M_PI" value="3.1415926535897931" />
   
     <!-- The following values are approximate, and the camera node
@@ -137,15 +137,19 @@ aluminum peripherial evaluation case.
     <link name="${name}_color_optical_frame"/>
 
     <!-- Realsense Gazebo Plugin -->
-    <xacro:gazebo_d435  camera_name="${name}" 
-                        reference_link="${name}_link" 
+    <xacro:gazebo_d435  camera_name="${name}"
+                        reference_link="${name}_link"
                         topics_ns="${topics_ns}"
                         range_max_depth="${range_max_depth}"
                         depth_optical_frame="${name}_depth_optical_frame"
                         color_optical_frame="${name}_color_optical_frame"
                         infrared1_optical_frame="${name}_left_ir_optical_frame"
                         infrared2_optical_frame="${name}_right_ir_optical_frame"
-                        publish_pointcloud="${publish_pointcloud}"/>
+                        publish_pointcloud="${publish_pointcloud}"
+                        color_sensor_rate="${color_sensor_rate}"
+                        depth_sensor_rate="${depth_sensor_rate}"
+                        depth_plugin_rate="${depth_plugin_rate}"
+                        color_plugin_rate="${color_plugin_rate}"/>
 
   </xacro:macro>
 </robot>

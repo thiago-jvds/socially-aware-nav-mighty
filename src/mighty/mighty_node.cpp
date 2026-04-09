@@ -7,19 +7,27 @@
  * -------------------------------------------------------------------------- */
 
 #include <mighty/mighty_node.hpp>
+#include <mighty/esdf_grid_2d.hpp>
+#include <mighty/occ_grid_2d.hpp>
+#include <mighty/frontier_detector.hpp>
+#include <mighty/frontier_manager.hpp>
+#include <mighty/visited_map.hpp>
+
+using namespace std::chrono_literals;
+
+namespace mighty {
 
 // ----------------------------------------------------------------------------
 
 /**
  * @brief Constructor
  */
-MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
-{
-
+MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
   // Get id from ns
   ns_ = this->get_namespace();
   ns_ = ns_.substr(ns_.find_last_of("/") + 1);
-  id_str_ = ns_.substr(ns_.size() - 2); // ns is like NX01, so we get the last two characters and convert to int
+  id_str_ = ns_.substr(ns_.size() -
+                       2);  // ns is like NX01, so we get the last two characters and convert to int
   id_ = std::stoi(id_str_);
 
   // Declare, set, and print parameters
@@ -31,71 +39,103 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   rclcpp::QoS critical_qos(rclcpp::KeepLast(10));
   critical_qos.reliable().durability_volatile();
 
-  // Create callbackgroup
-  this->cb_group_mu_1_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_2_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_3_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_4_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_5_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_6_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_7_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_8_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_mu_9_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  this->cb_group_re_1_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_2_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_3_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_4_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_5_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_6_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_7_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_8_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_re_9_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_map_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  this->cb_group_replan_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  // Initialize callback groups
+  cb_groups_mu_.resize(9);
+  cb_groups_re_.resize(9);
+  for (int i = 0; i < 9; i++) {
+    cb_groups_mu_[i] = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_groups_re_[i] = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  }
+  // MutuallyExclusive (NOT Reentrant): every callback on this group mutates
+  // shared map state — occ_grid_2d_, esdf_grid_, visited_map_, frontier_manager_
+  // — without any internal locking. With Reentrant, two concurrent occ2DCallback
+  // invocations would race the `occ_grid_2d_ = OccGrid2D::fromOccupancyGrid(...)`
+  // assignment in occ2DCallback: the in-flight FrontierDetector::detect() in one
+  // thread holds a raw reference to the previous OccGrid2D, and the second
+  // thread's shared_ptr replacement drops its refcount to zero, freeing the
+  // unknown_/occupied_ vector data the BFS is still reading. SIGSEGV in
+  // isUnknown() inside the BFS expansion. Serializing the group fixes this and
+  // also closes the analogous race on frontier_manager_::update()/evict.
+  this->cb_group_map_ =
+      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  this->cb_group_replan_ =
+      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   this->cb_group_goal_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
   // Options for callback group
   rclcpp::SubscriptionOptions options_re_1;
-  options_re_1.callback_group = this->cb_group_re_1_;
+  options_re_1.callback_group = this->cb_groups_re_[0];
   rclcpp::SubscriptionOptions options_re_2;
-  options_re_2.callback_group = this->cb_group_re_2_;
+  options_re_2.callback_group = this->cb_groups_re_[1];
   rclcpp::SubscriptionOptions options_map;
   options_map.callback_group = this->cb_group_map_;
 
   // Visulaization publishers
-  pub_dynamic_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_occupied_grid", 10);                                              // visual level 2 (no longer used)
-  pub_static_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("static_map_marker", 10);                                     // visual level 2
-  pub_dynamic_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("dynamic_map_marker", 10);                                   // visual level 2
-  pub_free_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("free_map_marker", 10);                                         // visual level 2
-  pub_unknown_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("unknown_map_marker", 10);                                   // visual level 2
-  pub_heat_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("heat_cloud", 10);                                                          // visual level 2
-  pub_ground_2d_occ_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("ground_2d_occupied", 10);                                               // 2D ground obstacle map
-  pub_ground_2d_heat_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("ground_2d_heat", 10);                                                // 2D terrain cost heat map
-  pub_free_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("free_grid", 10);                                                             // visual level 2 (no longer used)
-  pub_unknown_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("unknown_grid", 10);                                                       // visual level 2 (no longer used)
-  pub_dgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("dgp_path_marker", 10);                                         // visual level 1
-  pub_original_dgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("original_dgp_path_marker", 10);                       // visual level 1
-  pub_free_dgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("free_dgp_path_marker", 10);                               // visual level 1
-  pub_local_global_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("local_global_path_marker", 10);                       // visual level 1
-  pub_local_global_path_after_push_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("local_global_path_after_push_marker", 10); // visual level 1
-  pub_poly_whole_ = this->create_publisher<decomp_ros_msgs::msg::PolyhedronArray>("poly_whole", 10);                                                  // visual level 1
-  pub_poly_safe_ = this->create_publisher<decomp_ros_msgs::msg::PolyhedronArray>("poly_safe", 10);                                                    // visual level 1
-  pub_traj_committed_colored_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("traj_committed_colored", 10);                           // visual level 1
-  pub_traj_subopt_colored_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("traj_subopt_colored", 10);                                 // visual level 1
-  pub_setpoint_ = this->create_publisher<geometry_msgs::msg::PointStamped>("setpoint_vis", 10);                                                       // visual level 1
-  pub_actual_traj_ = this->create_publisher<visualization_msgs::msg::Marker>("actual_traj", 10);                                                      // visual level 1
-  pub_fov_ = this->create_publisher<visualization_msgs::msg::Marker>("fov", 10);                                                                      // visual level 1
-  pub_cp_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("cp", 10);                                                                   // visual level 1
-  pub_static_push_points_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("static_push_points", 10);                                   // visual level 1
-  pub_p_points_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("p_points", 10);                                                       // visual level 1
-  pub_point_A_ = this->create_publisher<geometry_msgs::msg::PointStamped>("point_A", 10);                                                             // visual level 1
-  pub_point_G_ = this->create_publisher<geometry_msgs::msg::PointStamped>("point_G", 10);                                                             // visual level 1
-  pub_point_E_ = this->create_publisher<geometry_msgs::msg::PointStamped>("point_E", 10);                                                             // visual level 1
-  pub_point_G_term_ = this->create_publisher<geometry_msgs::msg::PointStamped>("point_G_term", 10);                                                   // visual level 1
-  pub_current_state_ = this->create_publisher<geometry_msgs::msg::PointStamped>("point_current_state", 10);                                           // visual level 1
+  pub_dynamic_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "dynamic_occupied_grid", 10);  // visual level 2 (no longer used)
+  pub_static_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "static_map_marker", 10);  // visual level 2
+  pub_dynamic_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "dynamic_map_marker", 10);  // visual level 2
+  pub_free_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "free_map_marker", 10);  // visual level 2
+  pub_unknown_map_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "unknown_map_marker", 10);  // visual level 2
+  pub_heat_cloud_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>("heat_cloud", 10);  // visual level 2
+  pub_ground_2d_occ_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "ground_2d_occupied", 10);  // 2D ground obstacle map
+  pub_ground_2d_heat_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "ground_2d_heat", 10);  // 2D terrain cost heat map
+  pub_free_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "free_grid", 10);  // visual level 2 (no longer used)
+  pub_unknown_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "unknown_grid", 10);  // visual level 2 (no longer used)
+  pub_hgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "hgp_path_marker", 10);  // visual level 1
+  pub_original_hgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "original_hgp_path_marker", 10);  // visual level 1
+  pub_free_hgp_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "free_hgp_path_marker", 10);  // visual level 1
+  pub_local_global_path_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "local_global_path_marker", 10);  // visual level 1
+  pub_local_global_path_after_push_marker_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>(
+          "local_global_path_after_push_marker", 10);  // visual level 1
+  pub_poly_whole_ = this->create_publisher<decomp_ros_msgs::msg::PolyhedronArray>(
+      "poly_whole", 10);  // visual level 1
+  pub_poly_safe_ = this->create_publisher<decomp_ros_msgs::msg::PolyhedronArray>(
+      "poly_safe", 10);  // visual level 1
+  pub_traj_committed_colored_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "traj_committed_colored", 10);  // visual level 1
+  pub_traj_subopt_colored_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "traj_subopt_colored", 10);  // visual level 1
+  pub_setpoint_ = this->create_publisher<geometry_msgs::msg::PointStamped>("setpoint_vis",
+                                                                           10);  // visual level 1
+  pub_actual_traj_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>("actual_traj", 10);  // visual level 1
+  pub_fov_ = this->create_publisher<visualization_msgs::msg::Marker>("fov", 10);   // visual level 1
+  pub_cp_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>("cp", 10);  // visual level 1
+  pub_static_push_points_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "static_push_points", 10);  // visual level 1
+  pub_p_points_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "p_points", 10);  // visual level 1
+  pub_point_A_ =
+      this->create_publisher<geometry_msgs::msg::PointStamped>("point_A", 10);  // visual level 1
+  pub_point_G_ =
+      this->create_publisher<geometry_msgs::msg::PointStamped>("point_G", 10);  // visual level 1
+  pub_point_E_ =
+      this->create_publisher<geometry_msgs::msg::PointStamped>("point_E", 10);  // visual level 1
+  pub_point_G_term_ = this->create_publisher<geometry_msgs::msg::PointStamped>(
+      "point_G_term", 10);  // visual level 1
+  pub_current_state_ = this->create_publisher<geometry_msgs::msg::PointStamped>(
+      "point_current_state", 10);  // visual level 1
   pub_vel_text_ = this->create_publisher<visualization_msgs::msg::Marker>("vel_text", 10);
-  pub_traj_received_ = this->create_publisher<visualization_msgs::msg::Marker>("traj_received", 10);          // frame alignment debug
-  pub_traj_transformed_ = this->create_publisher<visualization_msgs::msg::Marker>("traj_transformed", 10);    // frame alignment debug                                                            // visual level 1
+  pub_traj_received_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "traj_received", 10);  // frame alignment debug
+  pub_traj_transformed_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "traj_transformed", 10);  // frame alignment debug // visual level 1
 
   // Debug publishers
   pub_yaw_output_ = this->create_publisher<dynus_interfaces::msg::YawOutput>("yaw_output", 10);
@@ -103,55 +143,84 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   // Essential publishers
   pub_own_traj_ = this->create_publisher<dynus_interfaces::msg::DynTraj>("/trajs", critical_qos);
   pub_goal_ = this->create_publisher<dynus_interfaces::msg::Goal>("goal", critical_qos);
-  pub_trajectory_ = this->create_publisher<dynus_interfaces::msg::Trajectory>("trajectory", critical_qos);
+  pub_trajectory_ =
+      this->create_publisher<dynus_interfaces::msg::Trajectory>("trajectory", critical_qos);
   pub_mpc_path_ = this->create_publisher<dynus_interfaces::msg::SpeedyPath>("mpc_waypoints", 10);
   pub_goal_reached_ = this->create_publisher<std_msgs::msg::Empty>("goal_reached", critical_qos);
-  pub_command_to_exec_time_ = this->create_publisher<std_msgs::msg::Float64>("command_to_exec_time", 10);
+  pub_command_to_exec_time_ =
+      this->create_publisher<std_msgs::msg::Float64>("command_to_exec_time", 10);
 
   // Subscribers
-  sub_traj_ = this->create_subscription<dynus_interfaces::msg::DynTraj>("/trajs", critical_qos, std::bind(&MIGHTY_NODE::trajCallback, this, std::placeholders::_1), options_re_1);
-  sub_predicted_traj_ = this->create_subscription<dynus_interfaces::msg::DynTraj>("predicted_trajs", critical_qos, std::bind(&MIGHTY_NODE::trajCallback, this, std::placeholders::_1), options_re_1);
-  sub_state_ = this->create_subscription<dynus_interfaces::msg::State>("state", critical_qos, std::bind(&MIGHTY_NODE::stateCallback, this, std::placeholders::_1), options_re_1);
-  sub_terminal_goal_ = this->create_subscription<geometry_msgs::msg::PoseStamped>("term_goal", critical_qos, std::bind(&MIGHTY_NODE::terminalGoalCallback, this, std::placeholders::_1));
-  sub_lookahead_point_ = this->create_subscription<geometry_msgs::msg::PointStamped>("lookahead_point", 10, std::bind(&MIGHTY_NODE::lookaheadPointCallback, this, std::placeholders::_1));
+  sub_traj_ = this->create_subscription<dynus_interfaces::msg::DynTraj>(
+      "/trajs", critical_qos, std::bind(&MIGHTY_NODE::trajCallback, this, std::placeholders::_1),
+      options_re_1);
+  sub_predicted_traj_ = this->create_subscription<dynus_interfaces::msg::DynTraj>(
+      "predicted_trajs", critical_qos,
+      std::bind(&MIGHTY_NODE::trajCallback, this, std::placeholders::_1), options_re_1);
+  sub_state_ = this->create_subscription<dynus_interfaces::msg::State>(
+      "state", critical_qos, std::bind(&MIGHTY_NODE::stateCallback, this, std::placeholders::_1),
+      options_re_1);
+  sub_terminal_goal_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "term_goal", critical_qos,
+      std::bind(&MIGHTY_NODE::terminalGoalCallback, this, std::placeholders::_1));
+  // Shared swarm goal: a single /swarm_goal publication is fanned out to each
+  // agent's local terminal-goal pin via formation_self_offset, so the whole
+  // swarm can be commanded with one PoseStamped message.
+  if (par_.use_formation) {
+    sub_swarm_goal_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/swarm_goal", critical_qos,
+        std::bind(&MIGHTY_NODE::swarmGoalCallback, this, std::placeholders::_1));
+    RCLCPP_INFO(this->get_logger(),
+                "Subscribing to /swarm_goal with self offset [%.2f %.2f %.2f]",
+                par_.formation_self_offset[0], par_.formation_self_offset[1],
+                par_.formation_self_offset[2]);
+  }
+  sub_lookahead_point_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
+      "lookahead_point", 10,
+      std::bind(&MIGHTY_NODE::lookaheadPointCallback, this, std::placeholders::_1));
 
   // Frame alignment subscriptions (inter-agent transforms)
-  if (par_.use_frame_alignment)
-  {
-    for (int i = 1; i <= par_.num_agents; i++)
-    {
+  if (par_.use_frame_alignment) {
+    for (int i = 1; i <= par_.num_agents; i++) {
       if (i == id_) continue;
       std::string prefix = ns_.substr(0, ns_.size() - 2);
       char other_name[16];
       std::snprintf(other_name, sizeof(other_name), "%s%02d", prefix.c_str(), i);
-      std::string topic = "/lidar_registration/frame_align/" + ns_ + "/" + std::string(other_name);
+      std::string topic = "/frame_align/" + ns_ + "/" + std::string(other_name);
       frame_align_transforms_[i] = Eigen::Matrix4d::Identity();
       frame_align_received_[i] = false;
       auto sub = this->create_subscription<geometry_msgs::msg::TransformStamped>(
           topic, 10,
           [this, i](const geometry_msgs::msg::TransformStamped::SharedPtr msg) {
             this->frameAlignCallback(msg, i);
-          }, options_re_1);
+          },
+          options_re_1);
       frame_align_subs_.push_back(sub);
       RCLCPP_INFO(this->get_logger(), "Frame align: subscribed to %s", topic.c_str());
     }
   }
 
   // Timer for callback
-  timer_replanning_ = this->create_wall_timer(10ms, std::bind(&MIGHTY_NODE::replanCallback, this), this->cb_group_replan_);
-  timer_goal_ = this->create_wall_timer(std::chrono::duration<double>(par_.dc), std::bind(&MIGHTY_NODE::publishGoal, this), this->cb_group_goal_);
-  if (use_benchmark_)
-    timer_goal_reached_check_ = this->create_wall_timer(100ms, std::bind(&MIGHTY_NODE::goalReachedCheckCallback, this), this->cb_group_re_3_);
-  timer_cleanup_old_trajs_ = this->create_wall_timer(500ms, std::bind(&MIGHTY_NODE::cleanUpOldTrajsCallback, this), this->cb_group_mu_5_);
+  timer_replanning_ = this->create_wall_timer(10ms, std::bind(&MIGHTY_NODE::replanCallback, this),
+                                              this->cb_group_replan_);
+  timer_goal_ =
+      this->create_wall_timer(std::chrono::duration<double>(par_.dc),
+                              std::bind(&MIGHTY_NODE::publishGoal, this), this->cb_group_goal_);
+  // Goal-reached check is needed for both benchmark logging and exploration
+  // (so the manager knows when the robot has reached a frontier).
+  if (use_benchmark_ || par_.expl_enabled)
+    timer_goal_reached_check_ = this->create_wall_timer(
+        100ms, std::bind(&MIGHTY_NODE::goalReachedCheckCallback, this), this->cb_groups_re_[2]);
+  timer_cleanup_old_trajs_ = this->create_wall_timer(
+      500ms, std::bind(&MIGHTY_NODE::cleanUpOldTrajsCallback, this), this->cb_groups_mu_[4]);
   if (par_.use_hardware)
-    timer_initial_pose_ = this->create_wall_timer(100ms, std::bind(&MIGHTY_NODE::getInitialPoseHwCallback, this), this->cb_group_mu_9_);
+    timer_initial_pose_ = this->create_wall_timer(
+        100ms, std::bind(&MIGHTY_NODE::getInitialPoseHwCallback, this), this->cb_groups_mu_[8]);
 
   // Stop the timer for callback
-  if (timer_replanning_)
-    timer_replanning_->cancel();
-  if (timer_goal_)
-    timer_goal_->cancel();
-  if (!use_benchmark_ && timer_goal_reached_check_)
+  if (timer_replanning_) timer_replanning_->cancel();
+  if (timer_goal_) timer_goal_->cancel();
+  if (!use_benchmark_ && !par_.expl_enabled && timer_goal_reached_check_)
     timer_goal_reached_check_->cancel();
 
   // Initialize the DYNUS object
@@ -160,7 +229,8 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   // Initialize the tf2 buffer and listener
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf2_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf2_buffer_);
-  auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(this->get_node_base_interface(), this->get_node_timers_interface());
+  auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
+      this->get_node_base_interface(), this->get_node_timers_interface());
   tf2_buffer_->setCreateTimerInterface(timer_interface);
 
   // Initialize the d435 depth frame ID and camera
@@ -173,8 +243,7 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
   // Initialize the initial pose topic name
   initial_pose_topic_ = ns_ + "/init_pose";
 
-  if (par_.use_hardware)
-  {
+  if (par_.use_hardware) {
     // Hardware: subscribe independently (time-sync can fail due to timestamp mismatch)
     auto sensor_qos = rclcpp::SensorDataQoS();
     sub_occupancy_grid_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("occupancy_grid",
@@ -193,16 +262,93 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
     occup_grid_sub_.subscribe(this, "occupancy_grid", rmw_qos_profile_sensor_data, options_map);
     unknown_grid_sub_.subscribe(this, "unknown_grid", rmw_qos_profile_sensor_data, options_map);
     sync_.reset(new Sync(MySyncPolicy(10), occup_grid_sub_, unknown_grid_sub_));
-    sync_->registerCallback(std::bind(&MIGHTY_NODE::mapCallback, this, std::placeholders::_1, std::placeholders::_2));
-  }
-  else
-  {
-    sub_fake_sim_occupancy_map_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("sensor_point_cloud",
-    rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data)),
-    std::bind(&MIGHTY_NODE::occupancyMapCallback, this, std::placeholders::_1),
-    options_map);
+    sync_->registerCallback(
+        std::bind(&MIGHTY_NODE::mapCallback, this, std::placeholders::_1, std::placeholders::_2));
+  } else {
+    sub_fake_sim_occupancy_map_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "sensor_point_cloud",
+        rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data)),
+        std::bind(&MIGHTY_NODE::occupancyMapCallback, this, std::placeholders::_1), options_map);
   }
 
+  // ESDF subscription (ground robot only)
+  if (par_.use_esdf_cost && par_.vehicle_type == "ground_robot") {
+    sub_esdf_2d_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "esdf_2d_topic", 10,
+        std::bind(&MIGHTY_NODE::esdfCallback, this, std::placeholders::_1), options_map);
+    RCLCPP_INFO(this->get_logger(), "ESDF: Subscribed to esdf_2d_topic (d_safe=%.1f m, weight=%.0f)",
+                par_.esdf_d_safe, par_.esdf_weight);
+
+    // Also subscribe to binary 2D occupancy for A* planning
+    sub_occ_2d_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "occ_2d_topic", 10,
+        std::bind(&MIGHTY_NODE::occ2DCallback, this, std::placeholders::_1), options_map);
+    RCLCPP_INFO(this->get_logger(), "Occ2D: Subscribed to occ_2d_topic for ground robot A* planning");
+
+    // Frontier-based exploration. The detector + persistent manager run inside
+    // occ2DCallback; the explore-select timer issues exploration goals through
+    // the same pathway as a manual term_goal.
+    if (par_.expl_enabled) {
+      FrontierDetectorParams dp;
+      dp.cluster_min_cells       = par_.expl_cluster_min_cells;
+      dp.border_margin_cells     = par_.expl_border_margin_cells;
+      dp.obstacle_clearance_cells = par_.expl_obstacle_clearance_cells;
+      dp.robot_snap_radius_m     = par_.expl_robot_snap_radius_m;
+      dp.bounds_enabled          = par_.expl_bounds_enabled;
+      dp.bounds_min_x            = par_.expl_bounds_min_x;
+      dp.bounds_max_x            = par_.expl_bounds_max_x;
+      dp.bounds_min_y            = par_.expl_bounds_min_y;
+      dp.bounds_max_y            = par_.expl_bounds_max_y;
+      frontier_detector_ = std::make_unique<FrontierDetector>(dp);
+
+      FrontierManagerParams mp;
+      mp.merge_radius_m            = par_.expl_merge_radius_m;
+      mp.centroid_ema_alpha        = par_.expl_centroid_ema_alpha;
+      mp.visit_radius_m            = par_.expl_visit_radius_m;
+      mp.visit_dwell_sec           = par_.expl_visit_dwell_sec;
+      mp.verify_radius_cells       = par_.expl_verify_radius_cells;
+      mp.max_frontiers             = par_.expl_max_frontiers;
+      mp.w_size     = par_.expl_w_size;
+      mp.w_dist     = par_.expl_w_dist;
+      mp.w_info     = par_.expl_w_info;
+      mp.w_revisit  = par_.expl_w_revisit;
+      mp.w_heading  = par_.expl_w_heading;
+      mp.size_ref_m2     = par_.expl_size_ref_m2;
+      mp.dist_ref_m      = par_.expl_dist_ref_m;
+      mp.sensor_radius_m = par_.expl_sensor_radius_m;
+      mp.goal_select_threshold = par_.expl_goal_select_threshold;
+      frontier_manager_ = std::make_unique<FrontierManager>(mp);
+
+      // Persistent visited bitmap. Records every cell ever observed across
+      // the mission so the detector can suppress re-detection along the
+      // sliding-window seam when the robot revisits an area.
+      visited_map_ = std::make_unique<VisitedMap>(
+          par_.expl_visited_map_center_x,
+          par_.expl_visited_map_center_y,
+          par_.expl_visited_map_width_m,
+          par_.expl_visited_map_height_m,
+          par_.expl_visited_map_resolution_m);
+
+      pub_frontiers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+          "exploration/frontiers", 10);
+      pub_explore_current_goal_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+          "exploration/current_goal", 10);
+      pub_visited_map_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
+          "exploration/visited_map", rclcpp::QoS(1).transient_local());
+
+      const double rate_hz = std::max(0.1, par_.expl_select_rate_hz);
+      const auto period = std::chrono::duration<double>(1.0 / rate_hz);
+      timer_explore_select_ = this->create_wall_timer(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+          std::bind(&MIGHTY_NODE::exploreSelectCallback, this), this->cb_group_map_);
+
+      RCLCPP_INFO(this->get_logger(),
+                  "Exploration: enabled, select rate=%.1f Hz, min_cells=%d, "
+                  "merge_radius=%.2fm, visit_radius=%.2fm",
+                  rate_hz, par_.expl_cluster_min_cells,
+                  par_.expl_merge_radius_m, par_.expl_visit_radius_m);
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -210,8 +356,7 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node")
 /**
  * @brief Destructor
  */
-MIGHTY_NODE::~MIGHTY_NODE()
-{
+MIGHTY_NODE::~MIGHTY_NODE() {
   // release the memory
   mighty_ptr_.reset();
 }
@@ -221,9 +366,7 @@ MIGHTY_NODE::~MIGHTY_NODE()
 /**
  * @brief Declare the parameters
  */
-void MIGHTY_NODE::declareParameters()
-{
-
+void MIGHTY_NODE::declareParameters() {
   // Sim enviroment
   this->declare_parameter("sim_env", "fake_sim");
 
@@ -231,7 +374,7 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("vehicle_type", "uav");
   this->declare_parameter("provide_goal_in_global_frame", false);
   this->declare_parameter("use_hardware", false);
-  this->declare_parameter("use_mpc", false);
+  this->declare_parameter("use_trajectory_tracker", false);
   this->declare_parameter("map_frame_id", "map");
   this->declare_parameter("use_frame_alignment", false);
   this->declare_parameter("num_agents", 10);
@@ -239,6 +382,13 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("sim_frame_offset_qy", 0.0);
   this->declare_parameter("sim_frame_offset_qz", 0.0);
   this->declare_parameter("sim_frame_offset_qw", 1.0);
+
+  // Formation flight
+  this->declare_parameter("use_formation", false);
+  this->declare_parameter("formation_weight", 0.0);
+  this->declare_parameter("formation_self_offset", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("formation_neighbor_ids", std::vector<int64_t>{});
+  this->declare_parameter("formation_neighbor_offsets", std::vector<double>{});
 
   // Flight mode
   this->declare_parameter("flight_mode", "terminal_goal");
@@ -252,16 +402,16 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("start_yaw", -90.0);
   this->declare_parameter("global_planner", "sjps");
   this->declare_parameter("global_planner_verbose", false);
-  this->declare_parameter("global_planner_huristic_weight", 1.0);
-  this->declare_parameter("factor_dgp", 1.0);
-  this->declare_parameter("inflation_dgp", 0.5);
+  this->declare_parameter("global_planner_heuristic_weight", 1.0);
+  this->declare_parameter("factor_hgp", 1.0);
+  this->declare_parameter("inflation_hgp", 0.5);
   this->declare_parameter("x_min", -100.0);
   this->declare_parameter("x_max", 100.0);
   this->declare_parameter("y_min", -100.0);
   this->declare_parameter("y_max", 100.0);
   this->declare_parameter("z_min", 0.0);
   this->declare_parameter("z_max", 5.0);
-  this->declare_parameter("dgp_timeout_duration_ms", 1000);
+  this->declare_parameter("hgp_timeout_duration_ms", 1000);
   this->declare_parameter("max_expand", 10000);
   this->declare_parameter("use_free_start", false);
   this->declare_parameter("free_start_factor", 1.0);
@@ -275,8 +425,9 @@ void MIGHTY_NODE::declareParameters()
 
   // LOS post processing parameters
   this->declare_parameter("los_cells", 3);
-  this->declare_parameter("min_len", 0.5);   // [m] minimum length between two waypoints after post processing
-  this->declare_parameter("min_turn", 10.0); // [deg] minimum turn angle after post processing
+  this->declare_parameter("min_len",
+                          0.5);  // [m] minimum length between two waypoints after post processing
+  this->declare_parameter("min_turn", 10.0);  // [deg] minimum turn angle after post processing
   this->declare_parameter("heat_cutoff_ratio", 0.5);
   this->declare_parameter("disable_all_smoothing", false);
   this->declare_parameter("skip_path_smoothing", false);
@@ -333,6 +484,8 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("social_heat_delta_x", 0.2);
   this->declare_parameter("social_heat_delta_y", 0.15);
   this->declare_parameter("heat_num_samples", 15);
+  this->declare_parameter("prediction_horizon", 3.0);
+  this->declare_parameter("prediction_mask_distance", 2.0);
   this->declare_parameter("static_heat_enabled", false);
   this->declare_parameter("static_heat_alpha", 2.0);
   this->declare_parameter("static_heat_p", 2);
@@ -400,6 +553,7 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("mass", 1.0);
   this->declare_parameter("g", 9.81);
   this->declare_parameter("fopt_threshold", 0.1);
+  this->declare_parameter("spline_degree", 5);
 
   // L-BFGS parameters
   this->declare_parameter("f_dec_coeff", 1e-2);
@@ -457,8 +611,53 @@ void MIGHTY_NODE::declareParameters()
   this->declare_parameter("terrain_cost_mode", std::string("max"));
   this->declare_parameter("ground_slab_margin", 0.3);
 
+  // ESDF-based obstacle avoidance (ground robot only)
+  this->declare_parameter("use_esdf_cost", false);
+  this->declare_parameter("esdf_weight", 1e+3);
+  this->declare_parameter("esdf_d_safe", 1.0);
+  this->declare_parameter("esdf_truncation_distance", 10);
+
   this->declare_parameter("trajectory_downsample_points", 500);
   this->declare_parameter("mpc_path_spacing", 0.05);
+
+  // Frontier-based exploration (ground robot only).
+  this->declare_parameter("exploration.enabled", false);
+  this->declare_parameter("exploration.select_rate_hz", 1.0);
+  this->declare_parameter("exploration.default_goal_z", 0.0);
+  this->declare_parameter("exploration.detector.cluster_min_cells", 6);
+  this->declare_parameter("exploration.detector.border_margin_cells", 2);
+  this->declare_parameter("exploration.detector.obstacle_clearance_cells", 1);
+  this->declare_parameter("exploration.detector.robot_snap_radius_m", 1.0);
+  this->declare_parameter("exploration.bounds.enabled", false);
+  this->declare_parameter("exploration.bounds.min_x", -50.0);
+  this->declare_parameter("exploration.bounds.max_x",  50.0);
+  this->declare_parameter("exploration.bounds.min_y", -50.0);
+  this->declare_parameter("exploration.bounds.max_y",  50.0);
+  this->declare_parameter("exploration.detector.min_obstacle_distance_m", 0.0);
+  this->declare_parameter("exploration.utility.w_size", 1.0);
+  this->declare_parameter("exploration.utility.w_dist", 2.0);
+  this->declare_parameter("exploration.utility.w_info", 1.0);
+  this->declare_parameter("exploration.utility.w_revisit", 0.5);
+  this->declare_parameter("exploration.utility.w_heading", 0.3);
+  this->declare_parameter("exploration.utility.size_ref_m2", 5.0);
+  this->declare_parameter("exploration.utility.dist_ref_m", 25.0);
+  this->declare_parameter("exploration.utility.sensor_radius_m", 5.0);
+  this->declare_parameter("exploration.utility.goal_select_threshold", -1.0e9);
+  this->declare_parameter("exploration.manager.merge_radius_m", 1.0);
+  this->declare_parameter("exploration.manager.centroid_ema_alpha", 0.5);
+  this->declare_parameter("exploration.manager.visit_radius_m", 2.0);
+  this->declare_parameter("exploration.manager.visit_dwell_sec", 1.0);
+  this->declare_parameter("exploration.manager.verify_radius_cells", 2);
+  this->declare_parameter("exploration.manager.max_frontiers", 1000);
+  this->declare_parameter("exploration.manager.unreachable_consec_thresh", 5);
+  this->declare_parameter("exploration.visited_map.center_x", 0.0);
+  this->declare_parameter("exploration.visited_map.center_y", 0.0);
+  this->declare_parameter("exploration.visited_map.width_m", 100.0);
+  this->declare_parameter("exploration.visited_map.height_m", 100.0);
+  this->declare_parameter("exploration.visited_map.resolution_m", 0.15);
+  this->declare_parameter("exploration.visited_map.publish", true);
+  this->declare_parameter("exploration.visited_map.fuse_into_local", true);
+  this->declare_parameter("exploration.visualization.publish_markers", true);
 }
 
 // ----------------------------------------------------------------------------
@@ -466,8 +665,7 @@ void MIGHTY_NODE::declareParameters()
 /**
  * @brief Set the parameters
  */
-void MIGHTY_NODE::setParameters()
-{
+void MIGHTY_NODE::setParameters() {
   // Set the parameters
 
   // Sim enviroment
@@ -477,7 +675,7 @@ void MIGHTY_NODE::setParameters()
   par_.vehicle_type = this->get_parameter("vehicle_type").as_string();
   par_.provide_goal_in_global_frame = this->get_parameter("provide_goal_in_global_frame").as_bool();
   par_.use_hardware = this->get_parameter("use_hardware").as_bool();
-  par_.use_mpc = this->get_parameter("use_mpc").as_bool();
+  par_.use_trajectory_tracker = this->get_parameter("use_trajectory_tracker").as_bool();
   par_.map_frame_id = this->get_parameter("map_frame_id").as_string();
   par_.use_frame_alignment = this->get_parameter("use_frame_alignment").as_bool();
   par_.num_agents = this->get_parameter("num_agents").as_int();
@@ -485,6 +683,30 @@ void MIGHTY_NODE::setParameters()
   par_.sim_frame_offset_qy = this->get_parameter("sim_frame_offset_qy").as_double();
   par_.sim_frame_offset_qz = this->get_parameter("sim_frame_offset_qz").as_double();
   par_.sim_frame_offset_qw = this->get_parameter("sim_frame_offset_qw").as_double();
+
+  // Formation flight
+  par_.use_formation = this->get_parameter("use_formation").as_bool();
+  par_.formation_weight = this->get_parameter("formation_weight").as_double();
+  par_.formation_self_offset = this->get_parameter("formation_self_offset").as_double_array();
+  par_.formation_neighbor_ids = this->get_parameter("formation_neighbor_ids").as_integer_array();
+  par_.formation_neighbor_offsets =
+      this->get_parameter("formation_neighbor_offsets").as_double_array();
+  if (par_.use_formation) {
+    if (par_.formation_self_offset.size() != 3) {
+      RCLCPP_FATAL(this->get_logger(),
+                   "formation_self_offset must have length 3 (got %zu); shutting down",
+                   par_.formation_self_offset.size());
+      rclcpp::shutdown();
+    }
+    if (par_.formation_neighbor_offsets.size() != 3 * par_.formation_neighbor_ids.size()) {
+      RCLCPP_FATAL(this->get_logger(),
+                   "formation_neighbor_offsets length (%zu) must be 3 * "
+                   "formation_neighbor_ids length (%zu); shutting down",
+                   par_.formation_neighbor_offsets.size(),
+                   par_.formation_neighbor_ids.size());
+      rclcpp::shutdown();
+    }
+  }
 
   // Build the sim frame offset matrix
   {
@@ -508,22 +730,18 @@ void MIGHTY_NODE::setParameters()
   use_benchmark_ = this->get_parameter("use_benchmark").as_bool();
   par_.global_planner = this->get_parameter("global_planner").as_string();
   par_.global_planner_verbose = this->get_parameter("global_planner_verbose").as_bool();
-  par_.global_planner_huristic_weight = this->get_parameter("global_planner_huristic_weight").as_double();
-  par_.factor_dgp = this->get_parameter("factor_dgp").as_double();
-  par_.inflation_dgp = this->get_parameter("inflation_dgp").as_double();
+  par_.global_planner_heuristic_weight =
+      this->get_parameter("global_planner_heuristic_weight").as_double();
+  par_.factor_hgp = this->get_parameter("factor_hgp").as_double();
+  par_.inflation_hgp = this->get_parameter("inflation_hgp").as_double();
   par_.x_min = this->get_parameter("x_min").as_double();
   par_.x_max = this->get_parameter("x_max").as_double();
   par_.y_min = this->get_parameter("y_min").as_double();
   par_.y_max = this->get_parameter("y_max").as_double();
   par_.z_min = this->get_parameter("z_min").as_double();
   par_.z_max = this->get_parameter("z_max").as_double();
-  par_.dgp_timeout_duration_ms = this->get_parameter("dgp_timeout_duration_ms").as_int();
+  par_.hgp_timeout_duration_ms = this->get_parameter("hgp_timeout_duration_ms").as_int();
   par_.max_expand = this->get_parameter("max_expand").as_int();
-
-  // Set HGP aliases from DGP parameters
-  par_.factor_hgp = par_.factor_dgp;
-  par_.inflation_hgp = par_.inflation_dgp;
-  par_.hgp_timeout_duration_ms = par_.dgp_timeout_duration_ms;
   par_.max_num_expansion = par_.max_expand;
 
   par_.use_free_start = this->get_parameter("use_free_start").as_bool();
@@ -548,8 +766,10 @@ void MIGHTY_NODE::setParameters()
 
   // Path push visualization parameters
   par_.use_state_update = this->get_parameter("use_state_update").as_bool();
-  par_.use_random_color_for_global_path = this->get_parameter("use_random_color_for_global_path").as_bool();
-  par_.use_path_push_for_visualization = this->get_parameter("use_path_push_for_visualization").as_bool();
+  par_.use_random_color_for_global_path =
+      this->get_parameter("use_random_color_for_global_path").as_bool();
+  par_.use_path_push_for_visualization =
+      this->get_parameter("use_path_push_for_visualization").as_bool();
 
   // Static obstacle push parameters
 
@@ -598,12 +818,15 @@ void MIGHTY_NODE::setParameters()
   par_.social_heat_delta_x = this->get_parameter("social_heat_delta_x").as_double();
   par_.social_heat_delta_y = this->get_parameter("social_heat_delta_y").as_double();
   par_.heat_num_samples = this->get_parameter("heat_num_samples").as_int();
+  par_.prediction_horizon = this->get_parameter("prediction_horizon").as_double();
+  par_.prediction_mask_distance = this->get_parameter("prediction_mask_distance").as_double();
   par_.static_heat_enabled = this->get_parameter("static_heat_enabled").as_bool();
   par_.static_heat_alpha = this->get_parameter("static_heat_alpha").as_double();
   par_.static_heat_p = this->get_parameter("static_heat_p").as_int();
   par_.static_heat_Hmax = this->get_parameter("static_heat_Hmax").as_double();
   par_.static_heat_rmax_m = this->get_parameter("static_heat_rmax_m").as_double();
-  par_.static_heat_default_radius_m = this->get_parameter("static_heat_default_radius_m").as_double();
+  par_.static_heat_default_radius_m =
+      this->get_parameter("static_heat_default_radius_m").as_double();
   par_.static_heat_boundary_only = this->get_parameter("static_heat_boundary_only").as_bool();
   par_.static_heat_apply_on_unknown = this->get_parameter("static_heat_apply_on_unknown").as_bool();
   par_.static_heat_exclude_dynamic = this->get_parameter("static_heat_exclude_dynamic").as_bool();
@@ -666,6 +889,7 @@ void MIGHTY_NODE::setParameters()
   par_.mass = this->get_parameter("mass").as_double();
   par_.g = this->get_parameter("g").as_double();
   par_.fopt_threshold = this->get_parameter("fopt_threshold").as_double();
+  par_.spline_degree = this->get_parameter("spline_degree").as_int();
 
   // L-BFGS parameters
   par_.f_dec_coeff = this->get_parameter("f_dec_coeff").as_double();
@@ -701,13 +925,11 @@ void MIGHTY_NODE::setParameters()
   par_.force_goal_z = this->get_parameter("force_goal_z").as_bool();
   par_.default_goal_z = this->get_parameter("default_goal_z").as_double();
 
-  if (par_.default_goal_z <= par_.z_min)
-  {
+  if (par_.default_goal_z <= par_.z_min) {
     RCLCPP_ERROR(this->get_logger(), "Default goal z is lower than the ground level");
   }
 
-  if (par_.default_goal_z >= par_.z_max)
-  {
+  if (par_.default_goal_z >= par_.z_max) {
     RCLCPP_ERROR(this->get_logger(), "Default goal z is higher than the max level");
   }
 
@@ -733,8 +955,56 @@ void MIGHTY_NODE::setParameters()
   par_.terrain_cost_mode = this->get_parameter("terrain_cost_mode").as_string();
   par_.ground_slab_margin = this->get_parameter("ground_slab_margin").as_double();
 
+  par_.use_esdf_cost = this->get_parameter("use_esdf_cost").as_bool();
+  par_.esdf_weight = this->get_parameter("esdf_weight").as_double();
+  par_.esdf_d_safe = this->get_parameter("esdf_d_safe").as_double();
+  par_.esdf_truncation_distance = this->get_parameter("esdf_truncation_distance").as_int();
+
   par_.trajectory_downsample_points = this->get_parameter("trajectory_downsample_points").as_int();
   par_.mpc_path_spacing = this->get_parameter("mpc_path_spacing").as_double();
+
+  // Frontier-based exploration
+  par_.expl_enabled              = this->get_parameter("exploration.enabled").as_bool();
+  par_.expl_select_rate_hz       = this->get_parameter("exploration.select_rate_hz").as_double();
+  par_.expl_default_goal_z       = this->get_parameter("exploration.default_goal_z").as_double();
+  par_.expl_cluster_min_cells    = this->get_parameter("exploration.detector.cluster_min_cells").as_int();
+  par_.expl_border_margin_cells  = this->get_parameter("exploration.detector.border_margin_cells").as_int();
+  par_.expl_obstacle_clearance_cells =
+      this->get_parameter("exploration.detector.obstacle_clearance_cells").as_int();
+  par_.expl_robot_snap_radius_m  = this->get_parameter("exploration.detector.robot_snap_radius_m").as_double();
+  par_.expl_bounds_enabled       = this->get_parameter("exploration.bounds.enabled").as_bool();
+  par_.expl_bounds_min_x         = this->get_parameter("exploration.bounds.min_x").as_double();
+  par_.expl_bounds_max_x         = this->get_parameter("exploration.bounds.max_x").as_double();
+  par_.expl_bounds_min_y         = this->get_parameter("exploration.bounds.min_y").as_double();
+  par_.expl_bounds_max_y         = this->get_parameter("exploration.bounds.max_y").as_double();
+  par_.expl_min_obstacle_distance_m =
+      this->get_parameter("exploration.detector.min_obstacle_distance_m").as_double();
+  par_.expl_w_size               = this->get_parameter("exploration.utility.w_size").as_double();
+  par_.expl_w_dist               = this->get_parameter("exploration.utility.w_dist").as_double();
+  par_.expl_w_info               = this->get_parameter("exploration.utility.w_info").as_double();
+  par_.expl_w_revisit            = this->get_parameter("exploration.utility.w_revisit").as_double();
+  par_.expl_w_heading            = this->get_parameter("exploration.utility.w_heading").as_double();
+  par_.expl_size_ref_m2          = this->get_parameter("exploration.utility.size_ref_m2").as_double();
+  par_.expl_dist_ref_m           = this->get_parameter("exploration.utility.dist_ref_m").as_double();
+  par_.expl_sensor_radius_m      = this->get_parameter("exploration.utility.sensor_radius_m").as_double();
+  par_.expl_goal_select_threshold = this->get_parameter("exploration.utility.goal_select_threshold").as_double();
+  par_.expl_merge_radius_m       = this->get_parameter("exploration.manager.merge_radius_m").as_double();
+  par_.expl_centroid_ema_alpha   = this->get_parameter("exploration.manager.centroid_ema_alpha").as_double();
+  par_.expl_visit_radius_m       = this->get_parameter("exploration.manager.visit_radius_m").as_double();
+  par_.expl_visit_dwell_sec      = this->get_parameter("exploration.manager.visit_dwell_sec").as_double();
+  par_.expl_verify_radius_cells  = this->get_parameter("exploration.manager.verify_radius_cells").as_int();
+  par_.expl_max_frontiers        = this->get_parameter("exploration.manager.max_frontiers").as_int();
+  par_.expl_unreachable_consec_thresh =
+      this->get_parameter("exploration.manager.unreachable_consec_thresh").as_int();
+  par_.expl_visited_map_center_x   = this->get_parameter("exploration.visited_map.center_x").as_double();
+  par_.expl_visited_map_center_y   = this->get_parameter("exploration.visited_map.center_y").as_double();
+  par_.expl_visited_map_width_m    = this->get_parameter("exploration.visited_map.width_m").as_double();
+  par_.expl_visited_map_height_m   = this->get_parameter("exploration.visited_map.height_m").as_double();
+  par_.expl_visited_map_resolution_m = this->get_parameter("exploration.visited_map.resolution_m").as_double();
+  par_.expl_publish_visited_map    = this->get_parameter("exploration.visited_map.publish").as_bool();
+  par_.expl_fuse_persistent_into_local =
+      this->get_parameter("exploration.visited_map.fuse_into_local").as_bool();
+  par_.expl_publish_markers      = this->get_parameter("exploration.visualization.publish_markers").as_bool();
 }
 
 // ----------------------------------------------------------------------------
@@ -742,8 +1012,7 @@ void MIGHTY_NODE::setParameters()
 /**
  * @brief Print the parameters
  */
-void MIGHTY_NODE::printParameters()
-{
+void MIGHTY_NODE::printParameters() {
   // Print the parameters
 
   // Sim enviroment
@@ -751,7 +1020,8 @@ void MIGHTY_NODE::printParameters()
 
   // Vehicle type (UAV, Wheeled Robit, or Quadruped)
   RCLCPP_INFO(this->get_logger(), "Vehicle Type: %d", par_.vehicle_type);
-  RCLCPP_INFO(this->get_logger(), "Provide Goal in Global Frame: %d", par_.provide_goal_in_global_frame);
+  RCLCPP_INFO(this->get_logger(), "Provide Goal in Global Frame: %d",
+              par_.provide_goal_in_global_frame);
   RCLCPP_INFO(this->get_logger(), "Use Hardware: %d", par_.use_hardware);
   RCLCPP_INFO(this->get_logger(), "Use Frame Alignment: %d", par_.use_frame_alignment);
   RCLCPP_INFO(this->get_logger(), "Num Agents: %d", par_.num_agents);
@@ -762,21 +1032,22 @@ void MIGHTY_NODE::printParameters()
   // Visual
   RCLCPP_INFO(this->get_logger(), "Visual Level: %d", par_.visual_level);
 
-  // DGP parameters
+  // HGP parameters
   RCLCPP_INFO(this->get_logger(), "File Path: %s", file_path_.c_str());
   RCLCPP_INFO(this->get_logger(), "Perform Benchmark?: %d", use_benchmark_);
   RCLCPP_INFO(this->get_logger(), "Initial Guess Planner: %s", par_.global_planner.c_str());
-  RCLCPP_INFO(this->get_logger(), "DGP Planner Verbose: %d", par_.global_planner_verbose);
-  RCLCPP_INFO(this->get_logger(), "Global Planner Huristic Weight: %f", par_.global_planner_huristic_weight);
-  RCLCPP_INFO(this->get_logger(), "Factor DGP: %f", par_.factor_dgp);
-  RCLCPP_INFO(this->get_logger(), "Inflation DGP: %f", par_.inflation_dgp);
+  RCLCPP_INFO(this->get_logger(), "HGP Planner Verbose: %d", par_.global_planner_verbose);
+  RCLCPP_INFO(this->get_logger(), "Global Planner Heuristic Weight: %f",
+              par_.global_planner_heuristic_weight);
+  RCLCPP_INFO(this->get_logger(), "Factor HGP: %f", par_.factor_hgp);
+  RCLCPP_INFO(this->get_logger(), "Inflation HGP: %f", par_.inflation_hgp);
   RCLCPP_INFO(this->get_logger(), "X Min: %f", par_.x_min);
   RCLCPP_INFO(this->get_logger(), "X Max: %f", par_.x_max);
   RCLCPP_INFO(this->get_logger(), "Y Min: %f", par_.y_min);
   RCLCPP_INFO(this->get_logger(), "Y Max: %f", par_.y_max);
   RCLCPP_INFO(this->get_logger(), "Z Ground: %f", par_.z_min);
   RCLCPP_INFO(this->get_logger(), "Z Max: %f", par_.z_max);
-  RCLCPP_INFO(this->get_logger(), "DGP Timeout Duration: %d", par_.dgp_timeout_duration_ms);
+  RCLCPP_INFO(this->get_logger(), "HGP Timeout Duration: %d", par_.hgp_timeout_duration_ms);
   RCLCPP_INFO(this->get_logger(), "Use Free Start?: %d", par_.use_free_start);
   RCLCPP_INFO(this->get_logger(), "Free Start Factor: %f", par_.free_start_factor);
   RCLCPP_INFO(this->get_logger(), "Use Free Goal?: %d", par_.use_free_goal);
@@ -795,16 +1066,21 @@ void MIGHTY_NODE::printParameters()
 
   // Path push visualization parameters
   RCLCPP_INFO(this->get_logger(), "Use State Update?: %d", par_.use_state_update);
-  RCLCPP_INFO(this->get_logger(), "Use Random Color for Global Path?: %d", par_.use_random_color_for_global_path);
-  RCLCPP_INFO(this->get_logger(), "Use Path Push for Paper?: %d", par_.use_path_push_for_visualization);
+  RCLCPP_INFO(this->get_logger(), "Use Random Color for Global Path?: %d",
+              par_.use_random_color_for_global_path);
+  RCLCPP_INFO(this->get_logger(), "Use Path Push for Paper?: %d",
+              par_.use_path_push_for_visualization);
 
   // Static obstacle push parameters
 
-  RCLCPP_INFO(this->get_logger(), "Local Box Size: (%f, %f, %f)", par_.local_box_size[0], par_.local_box_size[1], par_.local_box_size[2]);
-  RCLCPP_INFO(this->get_logger(), "Min Dist from Agent to Traj: %f", par_.min_dist_from_agent_to_traj);
+  RCLCPP_INFO(this->get_logger(), "Local Box Size: (%f, %f, %f)", par_.local_box_size[0],
+              par_.local_box_size[1], par_.local_box_size[2]);
+  RCLCPP_INFO(this->get_logger(), "Min Dist from Agent to Traj: %f",
+              par_.min_dist_from_agent_to_traj);
   RCLCPP_INFO(this->get_logger(), "Use Shrinked Box: %d", par_.use_shrinked_box);
   RCLCPP_INFO(this->get_logger(), "Shrinked Box Size: %f", par_.shrinked_box_size);
-  RCLCPP_INFO(this->get_logger(), "SFC Use Unknown As Obstacle: %d", par_.sfc_use_unknown_as_obstacle);
+  RCLCPP_INFO(this->get_logger(), "SFC Use Unknown As Obstacle: %d",
+              par_.sfc_use_unknown_as_obstacle);
 
   // Map parameters
   RCLCPP_INFO(this->get_logger(), "Local Map Buffer: %f", par_.map_buffer);
@@ -819,7 +1095,8 @@ void MIGHTY_NODE::printParameters()
 
   // Communication delay parameters
   RCLCPP_INFO(this->get_logger(), "Use Comm Delay Inflation: %d", par_.use_comm_delay_inflation);
-  RCLCPP_INFO(this->get_logger(), "Comm Delay Inflation Alpha: %f", par_.comm_delay_inflation_alpha);
+  RCLCPP_INFO(this->get_logger(), "Comm Delay Inflation Alpha: %f",
+              par_.comm_delay_inflation_alpha);
   RCLCPP_INFO(this->get_logger(), "Comm Delay Inflation Max: %f", par_.comm_delay_inflation_max);
   RCLCPP_INFO(this->get_logger(), "Comm Delay Filter Alpha: %f", par_.comm_delay_filter_alpha);
 
@@ -830,7 +1107,8 @@ void MIGHTY_NODE::printParameters()
   RCLCPP_INFO(this->get_logger(), "FOV Visual Y Deg: %f", par_.fov_visual_y_deg);
 
   // Initial guess parameters
-  RCLCPP_INFO(this->get_logger(), "Use Multiple Initial Guesses: %d", par_.use_multiple_initial_guesses);
+  RCLCPP_INFO(this->get_logger(), "Use Multiple Initial Guesses: %d",
+              par_.use_multiple_initial_guesses);
   RCLCPP_INFO(this->get_logger(), "Num of Perturbations: %d", par_.num_perturbation_for_ig);
   RCLCPP_INFO(this->get_logger(), "r_max: %f", par_.r_max_for_ig);
 
@@ -846,17 +1124,24 @@ void MIGHTY_NODE::printParameters()
   RCLCPP_INFO(this->get_logger(), "Time Weight: %f", par_.time_weight);
   RCLCPP_INFO(this->get_logger(), "Position Anchor Weight: %f", par_.pos_anchor_weight);
   RCLCPP_INFO(this->get_logger(), "Static Obstacle Weight: %f", par_.stat_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Bodyrate Constr. Weight: %f", par_.dyn_constr_bodyrate_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Tilt Constr. Weight: %f", par_.dyn_constr_tilt_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Thrust Constr. Weight: %f", par_.dyn_constr_thrust_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Vel Constr. Weight: %f", par_.dyn_constr_vel_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Aeccel Constr. Weight: %f", par_.dyn_constr_acc_weight);
-  RCLCPP_INFO(this->get_logger(), "Violation of Jerk Constr. Weight: %f", par_.dyn_constr_jerk_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Bodyrate Constr. Weight: %f",
+              par_.dyn_constr_bodyrate_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Tilt Constr. Weight: %f",
+              par_.dyn_constr_tilt_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Thrust Constr. Weight: %f",
+              par_.dyn_constr_thrust_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Vel Constr. Weight: %f",
+              par_.dyn_constr_vel_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Aeccel Constr. Weight: %f",
+              par_.dyn_constr_acc_weight);
+  RCLCPP_INFO(this->get_logger(), "Violation of Jerk Constr. Weight: %f",
+              par_.dyn_constr_jerk_weight);
   RCLCPP_INFO(this->get_logger(), "Num Dynamic Obstacles Samples: %d", par_.num_dyn_obst_samples);
   RCLCPP_INFO(this->get_logger(), "Local Traj Co: %f", par_.planner_Co);
   RCLCPP_INFO(this->get_logger(), "Local Traj Cw: %f", par_.planner_Cw);
   RCLCPP_INFO(this->get_logger(), "Verbose Computation Time: %d", verbose_computation_time_);
-  RCLCPP_INFO(this->get_logger(), "Drone Bbox: (%f, %f, %f)", par_.drone_bbox[0], par_.drone_bbox[1], par_.drone_bbox[2]);
+  RCLCPP_INFO(this->get_logger(), "Drone Bbox: (%f, %f, %f)", par_.drone_bbox[0],
+              par_.drone_bbox[1], par_.drone_bbox[2]);
   RCLCPP_INFO(this->get_logger(), "Goal Radius: %f", par_.goal_radius);
   RCLCPP_INFO(this->get_logger(), "Goal Seen Radius: %f", par_.goal_seen_radius);
   RCLCPP_INFO(this->get_logger(), "Init Turn BF: %f", par_.init_turn_bf);
@@ -883,7 +1168,8 @@ void MIGHTY_NODE::printParameters()
   RCLCPP_INFO(this->get_logger(), "Traj Lifetime: %f", par_.traj_lifetime);
 
   // Dynamic k_value parameters
-  RCLCPP_INFO(this->get_logger(), "Num Replanning Before Adapt: %d", par_.num_replanning_before_adapt);
+  RCLCPP_INFO(this->get_logger(), "Num Replanning Before Adapt: %d",
+              par_.num_replanning_before_adapt);
   RCLCPP_INFO(this->get_logger(), "Default K Value End: %d", par_.default_k_value);
   RCLCPP_INFO(this->get_logger(), "Alpha K Value: %f", par_.alpha_k_value_filtering);
   RCLCPP_INFO(this->get_logger(), "K Value Inflation: %f", par_.k_value_factor);
@@ -907,8 +1193,7 @@ void MIGHTY_NODE::printParameters()
 /**
  * @brief Callback function to clean up old trajs in DYNUS
  */
-void MIGHTY_NODE::cleanUpOldTrajsCallback()
-{
+void MIGHTY_NODE::cleanUpOldTrajsCallback() {
   // Get current time
   double current_time = this->now().seconds();
 
@@ -922,12 +1207,9 @@ void MIGHTY_NODE::cleanUpOldTrajsCallback()
  * @brief Callback function to update the traj
  * @param msg Trajectory message
  */
-void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr msg)
-{
-
+void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr msg) {
   // Filter out its own traj
-  if (msg->id == id_)
-    return;
+  if (msg->id == id_) return;
 
   // Get current time
   double current_time = this->now().seconds();
@@ -937,11 +1219,9 @@ void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr m
   convertDynTrajMsg2DynTraj(*msg, traj, current_time);
 
   // Helper to publish a trajectory as a LINE_STRIP marker
-  auto publishTrajMarker = [&](
-      const std::shared_ptr<dynTraj> &t,
-      rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
-      float r, float g, float b, double z_offset)
-  {
+  auto publishTrajMarker = [&](const std::shared_ptr<dynTraj>& t,
+                               rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr& pub,
+                               float r, float g, float b, double z_offset) {
     visualization_msgs::msg::Marker m;
     m.header.frame_id = par_.map_frame_id;
     m.header.stamp = this->now();
@@ -950,7 +1230,10 @@ void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr m
     m.type = visualization_msgs::msg::Marker::LINE_STRIP;
     m.action = visualization_msgs::msg::Marker::ADD;
     m.scale.x = 0.08;
-    m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = 1.0;
+    m.color.r = r;
+    m.color.g = g;
+    m.color.b = b;
+    m.color.a = 1.0;
     m.lifetime = rclcpp::Duration(1, 0);  // 1 second
     const int N = 30;
     // Sample over the trajectory's actual time range instead of a fixed window
@@ -964,20 +1247,32 @@ void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr m
       tf = current_time + 2.0;  // fallback for analytic
     }
     if (tf <= t0) tf = t0 + 2.0;  // safety: ensure non-degenerate range
-    for (int i = 0; i <= N; i++)
-    {
+    // Skip if piecewise trajectory has no data (empty times → eval would crash)
+    if (t->mode == dynTraj::Mode::Piecewise && t->pwp.times.empty()) return;
+    for (int i = 0; i <= N; i++) {
       double ti = t0 + (tf - t0) * i / N;
       Eigen::Vector3d p = t->eval(ti);
       geometry_msgs::msg::Point pt;
-      pt.x = p.x(); pt.y = p.y(); pt.z = p.z() + z_offset;
+      pt.x = p.x();
+      pt.y = p.y();
+      pt.z = p.z() + z_offset;
       m.points.push_back(pt);
     }
     pub->publish(m);
   };
 
   // Apply frame alignment transform if enabled
-  if (par_.use_frame_alignment)
-  {
+  if (par_.use_frame_alignment) {
+    // Drop trajectory if we haven't received frame alignment for this sender yet
+    {
+      std::lock_guard<std::mutex> lock(frame_align_mutex_);
+      if (!frame_align_received_.count(msg->id) || !frame_align_received_[msg->id]) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Dropping traj from agent %d — no frame alignment received yet", msg->id);
+        return;
+      }
+    }
+
     // Publish BEFORE transform (red, slight z offset for debug)
     publishTrajMarker(traj, pub_traj_received_, 1.0, 0.2, 0.2, 0.1);
 
@@ -986,8 +1281,7 @@ void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr m
 
     // Undo ego's sim_frame_offset: ego's frame → world frame
     // (In fake_sim the agent operates in world frame, so we need to bring it back)
-    if (!sim_frame_offset_inv_.isIdentity(1e-9))
-      applyTransformToTraj(traj, sim_frame_offset_inv_);
+    if (!sim_frame_offset_inv_.isIdentity(1e-9)) applyTransformToTraj(traj, sim_frame_offset_inv_);
   }
 
   // Always publish other agents' trajectories in solid blue (after transform if applicable)
@@ -1003,11 +1297,8 @@ void MIGHTY_NODE::trajCallback(const dynus_interfaces::msg::DynTraj::SharedPtr m
  * @brief Callback function for the state of the agent
  * @param msg State message
  */
-void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr msg)
-{
-
-  if (par_.use_state_update)
-  {
+void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr msg) {
+  if (par_.use_state_update) {
     state current_state;
     current_state.setPos(msg->pos.x, msg->pos.y, msg->pos.z);
     current_state.setVel(msg->vel.x, msg->vel.y, msg->vel.z);
@@ -1015,22 +1306,19 @@ void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
     double roll, pitch, yaw;
     quaternion2Euler(msg->quat, roll, pitch, yaw);
     current_state.setYaw(yaw);
+    current_state.t = this->now().seconds();
     mighty_ptr_->updateState(current_state);
 
     // publish the state
     publishCurrentState(current_state);
 
     // Publish the velocity in text
-    if (par_.visual_level >= 1)
-      publishVelocityInText(current_state.pos, current_state.vel.norm());
+    if (par_.visual_level >= 1) publishVelocityInText(current_state.pos, current_state.vel.norm());
   }
 
-  if (!state_initialized_)
-  {
-
+  if (!state_initialized_) {
     // If we don't use state update, we need to initialize the state
-    if (!par_.use_state_update)
-    {
+    if (!par_.use_state_update) {
       state current_state;
       current_state.setPos(msg->pos.x, msg->pos.y, msg->pos.z);
       current_state.setVel(msg->vel.x, msg->vel.y, msg->vel.z);
@@ -1046,8 +1334,7 @@ void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
     timer_goal_->reset();
   }
 
-  if (par_.visual_level >= 1)
-    publishActualTraj();
+  if (par_.visual_level >= 1) publishActualTraj();
 }
 
 // ----------------------------------------------------------------------------
@@ -1055,8 +1342,7 @@ void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
 /**
  * @brief Callback function for lookahead point from pure pursuit controller
  */
-void MIGHTY_NODE::lookaheadPointCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg)
-{
+void MIGHTY_NODE::lookaheadPointCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
   Eigen::Vector3d lookahead_point(msg->point.x, msg->point.y, msg->point.z);
   mighty_ptr_->setLookaheadPoint(lookahead_point);
 }
@@ -1066,42 +1352,62 @@ void MIGHTY_NODE::lookaheadPointCallback(const geometry_msgs::msg::PointStamped:
 /**
  * @brief Callback function for replanning
  */
-void MIGHTY_NODE::replanCallback()
-{
+void MIGHTY_NODE::replanCallback() {
   // Get the current time as double
   double current_time = this->now().seconds();
 
   // Set computation times to zero
   setComputationTimesToZero();
 
-  // Replan
-  auto [replanning_result, dgp_result] = mighty_ptr_->replan(replanning_computation_time_, current_time);
+  // Pass current ESDF snapshot to planner (ground robot only)
+  if (par_.use_esdf_cost && esdf_grid_) {
+    mighty_ptr_->setEsdfGrid(esdf_grid_);
+  }
 
-  // Get computation time (used to find point A) - note this value is not updated in the replan function
-  if (replanning_result)
-  {
+  // Replan
+  auto [replanning_result, hgp_result] =
+      mighty_ptr_->replan(replanning_computation_time_, current_time);
+
+  // Get computation time (used to find point A) - note this value is not updated in the replan
+  // function
+  if (replanning_result) {
     // Get the replanning computation time
     replanning_computation_time_ = this->now().seconds() - current_time;
     if (par_.debug_verbose)
       printf("Total Replanning: %f ms\n", replanning_computation_time_ * 1000.0);
   }
 
-  // To share trajectory with other agents
-  if (replanning_result)
-    publishOwnTraj();
+  // Frontier-unreachable detection: if the global planner consistently fails
+  // on an exploration goal, mark it INVALIDATED so the manager can pick the
+  // next one. We use hgp_result rather than replanning_result because the
+  // local L-BFGS may legitimately fail intermittently while HGP is fine.
+  if (par_.expl_enabled && exploration_active_ && frontier_manager_) {
+    if (!hgp_result) {
+      if (++unreachable_consec_count_ >= par_.expl_unreachable_consec_thresh) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Exploration: frontier %lu unreachable after %d HGP failures, "
+                    "invalidating",
+                    static_cast<unsigned long>(current_explore_id_),
+                    unreachable_consec_count_);
+        frontier_manager_->markInvalidated(current_explore_id_);
+        exploration_active_ = false;
+        unreachable_consec_count_ = 0;
+      }
+    } else {
+      unreachable_consec_count_ = 0;
+    }
+  }
 
-  // Publish full trajectory for ground robot tracking (increments trajectory_id on replan)
-  if (replanning_result)
-  {
-    if (par_.use_mpc)
-      publishMpcPath();
-    else
-      publishTrajectory();
+  // To share trajectory with other agents
+  if (replanning_result) publishOwnTraj();
+
+  // Publish trajectory for tracking (increments trajectory_id on replan)
+  if (replanning_result) {
+    publishTrajectory();
   }
 
   // Publish command-to-execution time (time from goal received to first trajectory)
-  if (replanning_result && waiting_for_first_traj_)
-  {
+  if (replanning_result && waiting_for_first_traj_) {
     double command_to_exec_time_ms = (this->now() - goal_received_time_).seconds() * 1000.0;
     std_msgs::msg::Float64 time_msg;
     time_msg.data = command_to_exec_time_ms;
@@ -1110,74 +1416,114 @@ void MIGHTY_NODE::replanCallback()
     RCLCPP_INFO(this->get_logger(), "Command to execution time: %.2f ms", command_to_exec_time_ms);
   }
 
+  // Throttle the visualization block to ~20 Hz. The replan loop is 100 Hz
+  // which is fine for control, but publishing all of these MarkerArrays at
+  // that rate (especially traj_committed_colored, hgp_path_marker,
+  // original_hgp_path_marker — measured at 100-200 Hz) overwhelms RViz and it
+  // drops messages with "some messages were lost" warnings. 20 Hz is visually
+  // smooth and cuts marker traffic ~5x.
+  bool do_viz = false;
+  if (par_.visual_level >= 1) {
+    const double t_now_viz = this->now().seconds();
+    if (t_now_viz - last_replan_viz_publish_t_ >= 0.05) {
+      do_viz = true;
+      last_replan_viz_publish_t_ = t_now_viz;
+    }
+  }
+
   // For visualization of global path
-  if (dgp_result && par_.visual_level >= 1)
-    publishGlobalPath();
+  if (hgp_result && do_viz) publishGlobalPath();
 
   // For visualization of free global path
-  if (dgp_result && par_.visual_level >= 1)
-    publishFreeGlobalPath();
+  if (hgp_result && do_viz) publishFreeGlobalPath();
 
   // For visualization of local_global_path and local_global_path_after_push_
-  if (dgp_result && par_.visual_level >= 1)
-    publishLocalGlobalPath();
+  if (hgp_result && do_viz) publishLocalGlobalPath();
 
   // For visualization of the local trajectory
-  if (replanning_result && par_.visual_level >= 1)
-    publishTraj();
+  if (replanning_result && do_viz) publishTraj();
 
   // For visualization of the safe corridor
-  if (dgp_result && par_.visual_level >= 1)
-    publishPoly();
+  if (hgp_result && do_viz) publishPoly();
 
   // For visualization of point G and point A
-  if (replanning_result && par_.visual_level >= 1)
-  {
+  if (replanning_result && do_viz) {
     publishPointG();
     publishPointE();
     publishPointA();
   }
 
   // For visualization of control points
-  if (replanning_result && par_.visual_level >= 1)
-    publisCps();
+  if (replanning_result && do_viz) publishCps();
 
   // For visualization of static push points and P points
-  if (replanning_result && par_.visual_level >= 1)
-  {
+  if (replanning_result && do_viz) {
     mighty_ptr_->getStaticPushPoints(static_push_points_);
     publishStaticPushPoints();
   }
 
-  // If verbose_computation_time_ or use_benchmark_ is true, we need to retrieve data from mighty_ptr_
-  if (verbose_computation_time_ || use_benchmark_)
-    retrieveData();
+  // If verbose_computation_time_ or use_benchmark_ is true, we need to retrieve data from
+  // mighty_ptr_
+  if (verbose_computation_time_ || use_benchmark_) retrieveData();
 
   // Verbose computation time to the terminal
-  if (verbose_computation_time_)
-    printComputationTime(replanning_result);
+  if (verbose_computation_time_) printComputationTime(replanning_result);
 
   // Record the data
   // if (replanning_result && use_benchmark_)
-  if (use_benchmark_)
-    recordData(replanning_result);
+  if (use_benchmark_) recordData(replanning_result);
 
-  // Usually this is done is goal callback but becuase we don't call that in push path test, we need to call it here
-  if (par_.use_path_push_for_visualization)
-    publishFOV();
+  // Usually this is done is goal callback but becuase we don't call that in push path test, we need
+  // to call it here
+  if (par_.use_path_push_for_visualization) publishFOV();
 }
 
 // ----------------------------------------------------------------------------
 
 /**
- * @brief Callback function for the terminal goal
- * @param msg Terminal goal message
+ * @brief Public callback for the terminal goal topic. A user-issued goal
+ *        preempts any active frontier exploration.
  */
-void MIGHTY_NODE::terminalGoalCallback(const geometry_msgs::msg::PoseStamped &msg)
-{
+void MIGHTY_NODE::terminalGoalCallback(const geometry_msgs::msg::PoseStamped& msg) {
+  terminalGoalCallbackImpl(msg, /*from_user=*/true);
+}
+
+/**
+ * @brief Apply the per-agent formation offset to a shared /swarm_goal
+ *        publication and forward to the standard goal-pin path.
+ *
+ *        Routing through terminalGoalCallbackImpl with from_user=true means
+ *        the swarm goal preempts exploration just like a manual goal would,
+ *        and the existing reconstruct() pin (P[M_]=xf_) automatically becomes
+ *        G_swarm + δ_i for each agent.
+ */
+void MIGHTY_NODE::swarmGoalCallback(const geometry_msgs::msg::PoseStamped& msg) {
+  geometry_msgs::msg::PoseStamped offset_msg = msg;
+  offset_msg.pose.position.x += par_.formation_self_offset[0];
+  offset_msg.pose.position.y += par_.formation_self_offset[1];
+  offset_msg.pose.position.z += par_.formation_self_offset[2];
+  terminalGoalCallbackImpl(offset_msg, /*from_user=*/true);
+}
+
+/**
+ * @brief Internal goal-issuing entry point shared by the public callback and
+ *        the frontier exploration loop. `from_user=true` records that a manual
+ *        goal is now active (preempting exploration); `from_user=false` is
+ *        used by the explore-select callback so the same routine doesn't
+ *        clobber its own state.
+ */
+void MIGHTY_NODE::terminalGoalCallbackImpl(const geometry_msgs::msg::PoseStamped& msg,
+                                           bool from_user) {
   // Record the time when goal is received (for command-to-execution timing)
   goal_received_time_ = this->now();
   waiting_for_first_traj_ = true;
+
+  if (from_user) {
+    manual_goal_active_ = true;
+    // A manual goal preempts any in-progress exploration goal.
+    exploration_active_ = false;
+    unreachable_consec_count_ = 0;
+  }
 
   // Set the terminal goal
   state G_term;
@@ -1190,8 +1536,7 @@ void MIGHTY_NODE::terminalGoalCallback(const geometry_msgs::msg::PoseStamped &ms
     goal_z = msg.pose.position.z;
 
   // Check if the goal_z is within the limits
-  if (goal_z < par_.z_min || goal_z > par_.z_max)
-  {
+  if (goal_z < par_.z_min || goal_z > par_.z_max) {
     RCLCPP_ERROR(this->get_logger(), "Goal z is out of bounds: %f", goal_z);
     return;
   }
@@ -1207,9 +1552,6 @@ void MIGHTY_NODE::terminalGoalCallback(const geometry_msgs::msg::PoseStamped &ms
 
   // Start replanning
   timer_replanning_->reset();
-
-  // clear all the trajectories on we receive a new goal
-  // clearMarkerActualTraj();
 }
 
 // ----------------------------------------------------------------------------
@@ -1219,9 +1561,7 @@ void MIGHTY_NODE::terminalGoalCallback(const geometry_msgs::msg::PoseStamped &ms
  * @param position Position to publish the text
  * @param velocity Velocity to publish
  */
-void MIGHTY_NODE::publishVelocityInText(const Eigen::Vector3d &position, double velocity)
-{
-
+void MIGHTY_NODE::publishVelocityInText(const Eigen::Vector3d& position, double velocity) {
   // Set velocity's precision to 2 decimal points
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(2) << velocity;
@@ -1239,9 +1579,9 @@ void MIGHTY_NODE::publishVelocityInText(const Eigen::Vector3d &position, double 
   marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
   marker.scale.z = 1.0;
   marker.color.a = 1.0;
-  marker.color.r = 1.0;
-  marker.color.g = 1.0;
-  marker.color.b = 1.0;
+  marker.color.r = 0.0;
+  marker.color.g = 0.0;
+  marker.color.b = 0.0;
   marker.text = text;
   marker.pose.position.x = position.x();
   marker.pose.position.y = position.y();
@@ -1255,12 +1595,24 @@ void MIGHTY_NODE::publishVelocityInText(const Eigen::Vector3d &position, double 
 /**
  * @brief Callback function to check if the goal is reached
  */
-void MIGHTY_NODE::goalReachedCheckCallback()
-{
-  if (mighty_ptr_->goalReachedCheck())
-  {
+void MIGHTY_NODE::goalReachedCheckCallback() {
+  if (!mighty_ptr_->goalReachedCheck()) return;
+
+  if (use_benchmark_) {
     logData();
-    pub_goal_reached_->publish(std_msgs::msg::Empty());
+  }
+  pub_goal_reached_->publish(std_msgs::msg::Empty());
+
+  // If the robot reached an exploration goal, mark it visited and clear our
+  // active flag so the next explore-select tick can pick the next frontier.
+  if (par_.expl_enabled && exploration_active_ && frontier_manager_) {
+    frontier_manager_->markVisited(current_explore_id_);
+    exploration_active_ = false;
+    unreachable_consec_count_ = 0;
+  }
+  // A manual goal that just completed releases the preemption.
+  if (manual_goal_active_) {
+    manual_goal_active_ = false;
   }
 }
 
@@ -1269,29 +1621,27 @@ void MIGHTY_NODE::goalReachedCheckCallback()
 /**
  * @brief Callback function to get the initial pose from tf (for hardware use case)
  */
-void MIGHTY_NODE::getInitialPoseHwCallback()
-{
+void MIGHTY_NODE::getInitialPoseHwCallback() {
   // First find the transformation matrix from map to camera
-  try
-  {
-    init_pose_transform_stamped_ = tf2_buffer_->lookupTransform("map", initial_pose_topic_, tf2::TimePointZero);
+  try {
+    init_pose_transform_stamped_ =
+        tf2_buffer_->lookupTransform("map", initial_pose_topic_, tf2::TimePointZero);
 
     // Print out the initial pose
-    RCLCPP_INFO(this->get_logger(), "Initial pose received: (%f, %f, %f)", init_pose_transform_stamped_.transform.translation.x,
-                init_pose_transform_stamped_.transform.translation.y, init_pose_transform_stamped_.transform.translation.z);
+    RCLCPP_INFO(this->get_logger(), "Initial pose received: (%f, %f, %f)",
+                init_pose_transform_stamped_.transform.translation.x,
+                init_pose_transform_stamped_.transform.translation.y,
+                init_pose_transform_stamped_.transform.translation.z);
 
     // Push the initial pose to dynus
     mighty_ptr_->setInitialPose(init_pose_transform_stamped_);
-  }
-  catch (tf2::TransformException &ex)
-  {
+  } catch (tf2::TransformException& ex) {
     RCLCPP_WARN(this->get_logger(), "Transform error: %s", ex.what());
     return;
   }
 
   // flag
-  if (!initial_pose_received_)
-  {
+  if (!initial_pose_received_) {
     initial_pose_received_ = true;
     timer_initial_pose_->cancel();
   }
@@ -1304,17 +1654,14 @@ void MIGHTY_NODE::getInitialPoseHwCallback()
  * @param msg TransformStamped message (T^{ego/map}_{other/map})
  * @param agent_id The ID of the other agent
  */
-void MIGHTY_NODE::frameAlignCallback(
-    const geometry_msgs::msg::TransformStamped::SharedPtr msg, int agent_id)
-{
+void MIGHTY_NODE::frameAlignCallback(const geometry_msgs::msg::TransformStamped::SharedPtr msg,
+                                     int agent_id) {
   Eigen::Matrix4d T = mighty_utils::transformStampedToMatrix(*msg);
   std::lock_guard<std::mutex> lock(frame_align_mutex_);
   frame_align_transforms_[agent_id] = T;
-  if (!frame_align_received_[agent_id])
-  {
+  if (!frame_align_received_[agent_id]) {
     frame_align_received_[agent_id] = true;
-    RCLCPP_INFO(this->get_logger(),
-                "Received first frame alignment for agent %d", agent_id);
+    RCLCPP_INFO(this->get_logger(), "Received first frame alignment for agent %d", agent_id);
   }
 }
 
@@ -1325,17 +1672,14 @@ void MIGHTY_NODE::frameAlignCallback(
  * @param traj The trajectory to transform (modified in place)
  * @param sender_id The ID of the sending agent
  */
-void MIGHTY_NODE::applyFrameAlignTransform(
-    std::shared_ptr<dynTraj> &traj, int sender_id)
-{
+void MIGHTY_NODE::applyFrameAlignTransform(std::shared_ptr<dynTraj>& traj, int sender_id) {
   Eigen::Matrix4d T;
   {
     std::lock_guard<std::mutex> lock(frame_align_mutex_);
     auto it = frame_align_transforms_.find(sender_id);
-    if (it == frame_align_transforms_.end() || !frame_align_received_[sender_id])
-    {
+    if (it == frame_align_transforms_.end() || !frame_align_received_[sender_id]) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-          "No frame alignment for agent %d yet", sender_id);
+                           "No frame alignment for agent %d yet", sender_id);
       return;
     }
     T = it->second;
@@ -1350,20 +1694,15 @@ void MIGHTY_NODE::applyFrameAlignTransform(
  * @param traj The trajectory to transform
  * @param T The 4x4 transformation matrix
  */
-void MIGHTY_NODE::applyTransformToTraj(
-    std::shared_ptr<dynTraj> &traj, const Eigen::Matrix4d &T)
-{
+void MIGHTY_NODE::applyTransformToTraj(std::shared_ptr<dynTraj>& traj, const Eigen::Matrix4d& T) {
   Eigen::Matrix3d R = T.block<3, 3>(0, 0);
 
   // Transform PieceWiseQuinticPol
-  if (traj->mode == dynTraj::Mode::Piecewise)
-  {
-    for (size_t i = 0; i < traj->pwp.coeff_x.size(); i++)
-    {
+  if (traj->mode == dynTraj::Mode::Piecewise) {
+    for (size_t i = 0; i < traj->pwp.coeff_x.size(); i++) {
       for (int j = 0; j < 5; j++)  // non-constant: rotate only
       {
-        Eigen::Vector3d c(traj->pwp.coeff_x[i](j),
-                          traj->pwp.coeff_y[i](j),
+        Eigen::Vector3d c(traj->pwp.coeff_x[i](j), traj->pwp.coeff_y[i](j),
                           traj->pwp.coeff_z[i](j));
         c = R * c;
         traj->pwp.coeff_x[i](j) = c.x();
@@ -1372,32 +1711,31 @@ void MIGHTY_NODE::applyTransformToTraj(
       }
       // constant term (j=5): full transform
       Eigen::Vector4d h;
-      h << traj->pwp.coeff_x[i](5), traj->pwp.coeff_y[i](5),
-           traj->pwp.coeff_z[i](5), 1.0;
+      h << traj->pwp.coeff_x[i](5), traj->pwp.coeff_y[i](5), traj->pwp.coeff_z[i](5), 1.0;
       h = T * h;
       traj->pwp.coeff_x[i](5) = h(0);
       traj->pwp.coeff_y[i](5) = h(1);
       traj->pwp.coeff_z[i](5) = h(2);
     }
-  }
-  else if (traj->mode == dynTraj::Mode::Quintic)
-  {
-    for (int j = 0; j < 5; j++)
-    {
+  } else if (traj->mode == dynTraj::Mode::Quintic) {
+    for (int j = 0; j < 5; j++) {
       Eigen::Vector3d c(traj->cx(j), traj->cy(j), traj->cz(j));
       c = R * c;
-      traj->cx(j) = c.x(); traj->cy(j) = c.y(); traj->cz(j) = c.z();
+      traj->cx(j) = c.x();
+      traj->cy(j) = c.y();
+      traj->cz(j) = c.z();
     }
     Eigen::Vector4d h;
     h << traj->cx(5), traj->cy(5), traj->cz(5), 1.0;
     h = T * h;
-    traj->cx(5) = h(0); traj->cy(5) = h(1); traj->cz(5) = h(2);
+    traj->cx(5) = h(0);
+    traj->cy(5) = h(1);
+    traj->cz(5) = h(2);
   }
   // Analytic mode: string expressions can't be transformed — agents use pwp/quintic
 
   // Transform goal
-  if (traj->is_agent)
-  {
+  if (traj->is_agent) {
     Eigen::Vector4d g;
     g << traj->goal.x(), traj->goal.y(), traj->goal.z(), 1.0;
     g = T * g;
@@ -1413,26 +1751,42 @@ void MIGHTY_NODE::applyTransformToTraj(
  * @param traj dynTraj
  * @param current_time current time
  */
-void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj &msg, std::shared_ptr<dynTraj> &traj, double current_time)
-{
-
+void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj& msg,
+                                            std::shared_ptr<dynTraj>& traj, double current_time) {
   // Inflate bbox using drone_bbox
   // We need to use the obstacle's bbox as well as ego drone's bbox
-  traj->bbox << msg.bbox[0] / 2.0 + par_.drone_bbox[0] / 2.0, msg.bbox[1] / 2.0 + par_.drone_bbox[1] / 2.0, msg.bbox[2] / 2.0 + par_.drone_bbox[2] / 2.0;
+  traj->bbox << msg.bbox[0] / 2.0 + par_.drone_bbox[0] / 2.0,
+      msg.bbox[1] / 2.0 + par_.drone_bbox[1] / 2.0, msg.bbox[2] / 2.0 + par_.drone_bbox[2] / 2.0;
 
   // Get id
   traj->id = msg.id;
 
-  // Get pwp
-  if (msg.mode == "pwp")
-  {
-    traj->pwp = mighty_utils::convertPwpMsg2Pwp(msg.pwp);
+  // Get pwp — quintic (6-coeff) takes priority, fall back to cubic (4-coeff) promoted to quintic
+  if (msg.mode == "pwp") {
+    if (!msg.quintic_pwp.times.empty()) {
+      traj->pwp = mighty_utils::convertPwpMsg2Pwp(msg.quintic_pwp);
+    } else if (!msg.pwp.times.empty()) {
+      // Cubic PWP from obstacle tracker — promote to quintic by zero-padding high-order coeffs
+      auto cubic = mighty_utils::convertPwpMsg2Pwp(msg.pwp);
+      traj->pwp.times = cubic.times;
+      traj->pwp.coeff_x.resize(cubic.coeff_x.size());
+      traj->pwp.coeff_y.resize(cubic.coeff_y.size());
+      traj->pwp.coeff_z.resize(cubic.coeff_z.size());
+      for (size_t i = 0; i < cubic.coeff_x.size(); ++i) {
+        // Quintic: [a*u^5, b*u^4, c*u^3, d*u^2, e*u, f] — set a=0, b=0, then c,d,e,f from cubic
+        traj->pwp.coeff_x[i] << 0.0, 0.0, cubic.coeff_x[i](0), cubic.coeff_x[i](1),
+            cubic.coeff_x[i](2), cubic.coeff_x[i](3);
+        traj->pwp.coeff_y[i] << 0.0, 0.0, cubic.coeff_y[i](0), cubic.coeff_y[i](1),
+            cubic.coeff_y[i](2), cubic.coeff_y[i](3);
+        traj->pwp.coeff_z[i] << 0.0, 0.0, cubic.coeff_z[i](0), cubic.coeff_z[i](1),
+            cubic.coeff_z[i](2), cubic.coeff_z[i](3);
+      }
+    }
     traj->mode = dynTraj::Mode::Piecewise;
   }
 
   // Find quihtic coefficients from the given pwp
-  if (msg.mode == "quintic")
-  {
+  if (msg.mode == "quintic") {
     traj->cx = mighty_utils::convertCoeffMsg2Coeff(msg.poly_coeffs_x);
     traj->cy = mighty_utils::convertCoeffMsg2Coeff(msg.poly_coeffs_y);
     traj->cz = mighty_utils::convertCoeffMsg2Coeff(msg.poly_coeffs_z);
@@ -1441,28 +1795,22 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
     traj->mode = dynTraj::Mode::Quintic;
   }
 
-  if (msg.mode == "analytic")
-  {
+  if (msg.mode == "analytic") {
     traj->mode = dynTraj::Mode::Analytic;
   }
 
   // Get covariances
-  if (!msg.is_agent)
-  {
-
-    if (msg.ekf_cov_p.size() != 0)
-    {
-      traj->ekf_cov_p = mighty_utils::convertCovMsg2Cov(msg.ekf_cov_p); // ekf cov
+  if (!msg.is_agent) {
+    if (msg.ekf_cov_p.size() != 0) {
+      traj->ekf_cov_p = mighty_utils::convertCovMsg2Cov(msg.ekf_cov_p);  // ekf cov
     }
 
-    if (msg.ekf_cov_q.size() != 0)
-    {
-      traj->ekf_cov_q = mighty_utils::convertCovMsg2Cov(msg.ekf_cov_q); // ekf cov
+    if (msg.ekf_cov_q.size() != 0) {
+      traj->ekf_cov_q = mighty_utils::convertCovMsg2Cov(msg.ekf_cov_q);  // ekf cov
     }
 
-    if (msg.poly_cov.size() != 0)
-    {
-      traj->poly_cov = mighty_utils::convertCovMsg2Cov(msg.poly_cov); // future traj cov
+    if (msg.poly_cov.size() != 0) {
+      traj->poly_cov = mighty_utils::convertCovMsg2Cov(msg.poly_cov);  // future traj cov
     }
 
     if (msg.mu.size() != 0)
@@ -1477,27 +1825,20 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
       traj->traj_z = msg.function[2];
     }
 
-    if (msg.velocity.size() == 3)
-    {
+    if (msg.velocity.size() == 3) {
       traj->traj_vx = msg.velocity[0];
       traj->traj_vy = msg.velocity[1];
       traj->traj_vz = msg.velocity[2];
     }
 
-    if (msg.function.size() == 3 && msg.velocity.size() == 3)
-    {
-      if (traj->compileAnalytic())
-      {
+    if (msg.function.size() == 3 && msg.velocity.size() == 3) {
+      if (traj->compileAnalytic()) {
         // Change the mode only when we successfully compiled the analytic trajectory
         traj->mode = dynTraj::Mode::Analytic;
         // printf("Successfully compiled analytic traj id=%d\n", traj->id);
-      }
-      else
-      {
-        RCLCPP_ERROR(
-            this->get_logger(),
-            "Failed to compile analytic traj id=%d, falling back to zeros.",
-            traj->id);
+      } else {
+        RCLCPP_ERROR(this->get_logger(),
+                     "Failed to compile analytic traj id=%d, falling back to zeros.", traj->id);
         // leave mode as whatever it was (Piecewise/Quintic),
         // or explicitly set a safe default here
       }
@@ -1511,19 +1852,17 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
   traj->is_agent = msg.is_agent;
 
   // Get terminal goal
-  if (traj->is_agent)
-    traj->goal << msg.goal[0], msg.goal[1], msg.goal[2];
+  if (traj->is_agent) traj->goal << msg.goal[0], msg.goal[1], msg.goal[2];
 
   // Get communication delay
-  if (traj->is_agent && par_.use_comm_delay_inflation)
-  {
+  if (traj->is_agent && par_.use_comm_delay_inflation) {
     // Get the delay (current time - msg time)
     traj->communication_delay = this->now().seconds();
     -msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9;
 
-    // Sanity check - if the delay is negative, set it to 0 - send warning message: it's probably due to the clock synchronization issue
-    if (traj->communication_delay < 0)
-    {
+    // Sanity check - if the delay is negative, set it to 0 - send warning message: it's probably
+    // due to the clock synchronization issue
+    if (traj->communication_delay < 0) {
       traj->communication_delay = 0;
       RCLCPP_WARN(this->get_logger(), "Communication delay is negative. Setting it to 0.");
     }
@@ -1536,9 +1875,7 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
  * @brief Publish control points
  */
 
-void MIGHTY_NODE::publisCps()
-{
-
+void MIGHTY_NODE::publishCps() {
   // Retrieve control points
   mighty_ptr_->retrieveCPs(cps_);
 
@@ -1547,9 +1884,7 @@ void MIGHTY_NODE::publisCps()
   marker_array.markers.resize(cps_.size());
 
   // Loop through the control points (std::vector<Eigen::Matrix<double, 3, 4>>)
-  for (int seg = 0; seg < cps_.size(); seg++)
-  {
-
+  for (int seg = 0; seg < cps_.size(); seg++) {
     // Create a marker
     visualization_msgs::msg::Marker marker;
     marker.header.frame_id = par_.map_frame_id;
@@ -1566,20 +1901,15 @@ void MIGHTY_NODE::publisCps()
     marker.color.a = 1.0;
 
     // Set different colors for different segments
-    if (seg % 3 == 0)
-    {
+    if (seg % 3 == 0) {
       marker.color.r = 1.0;
       marker.color.g = 0.0;
       marker.color.b = 0.0;
-    }
-    else if (seg % 3 == 1)
-    {
+    } else if (seg % 3 == 1) {
       marker.color.r = 0.0;
       marker.color.g = 1.0;
       marker.color.b = 0.0;
-    }
-    else
-    {
+    } else {
       marker.color.r = 0.0;
       marker.color.g = 0.0;
       marker.color.b = 1.0;
@@ -1588,8 +1918,7 @@ void MIGHTY_NODE::publisCps()
     auto cp = cps_[seg];
 
     // Loop through the control points for each segment
-    for (int i = 0; i < cp.cols(); i++)
-    {
+    for (int i = 0; i < cp.cols(); i++) {
       geometry_msgs::msg::Point point;
       point.x = cp(0, i);
       point.y = cp(1, i);
@@ -1610,9 +1939,7 @@ void MIGHTY_NODE::publisCps()
 /**
  * @brief Publish static push points
  */
-void MIGHTY_NODE::publishStaticPushPoints()
-{
-
+void MIGHTY_NODE::publishStaticPushPoints() {
   // Create a marker array
   visualization_msgs::msg::MarkerArray marker_array;
   visualization_msgs::msg::Marker marker;
@@ -1632,8 +1959,7 @@ void MIGHTY_NODE::publishStaticPushPoints()
   marker.color.b = 1.0;
 
   // Loop through the static push points
-  for (int idx = 0; idx < static_push_points_.size(); idx++)
-  {
+  for (int idx = 0; idx < static_push_points_.size(); idx++) {
     geometry_msgs::msg::Point point;
     point.x = static_push_points_[idx](0);
     point.y = static_push_points_[idx](1);
@@ -1653,8 +1979,7 @@ void MIGHTY_NODE::publishStaticPushPoints()
 /**
  * @brief Set computation times to zero
  */
-void MIGHTY_NODE::setComputationTimesToZero()
-{
+void MIGHTY_NODE::setComputationTimesToZero() {
   final_g_ = 0.0;
   global_planning_time_ = 0.0;
   hgp_static_jps_time_ = 0.0;
@@ -1675,21 +2000,12 @@ void MIGHTY_NODE::setComputationTimesToZero()
 /**
  * @brief Retrive computation times from mighty_ptr_
  */
-void MIGHTY_NODE::retrieveData()
-{
-  mighty_ptr_->retrieveData(final_g_,
-                            global_planning_time_,
-                            hgp_static_jps_time_,
-                            hgp_check_path_time_,
-                            hgp_dynamic_astar_time_,
-                            hgp_recover_path_time_,
-                            cvx_decomp_time_,
-                            initial_guess_computation_time_,
-                            local_traj_computation_time_,
-                            safety_check_time_,
-                            safe_paths_time_,
-                            yaw_sequence_time_,
-                            yaw_fitting_time_);
+void MIGHTY_NODE::retrieveData() {
+  mighty_ptr_->retrieveData(final_g_, global_planning_time_, hgp_static_jps_time_,
+                            hgp_check_path_time_, hgp_dynamic_astar_time_, hgp_recover_path_time_,
+                            cvx_decomp_time_, initial_guess_computation_time_,
+                            local_traj_computation_time_, safety_check_time_, safe_paths_time_,
+                            yaw_sequence_time_, yaw_fitting_time_);
 }
 
 // ----------------------------------------------------------------------------
@@ -1697,13 +2013,13 @@ void MIGHTY_NODE::retrieveData()
 /**
  * @brief Print the computation times
  */
-void MIGHTY_NODE::printComputationTime(bool result)
-{
+void MIGHTY_NODE::printComputationTime(bool result) {
   // Print the computation times
   RCLCPP_INFO(this->get_logger(), "Planner: %s", par_.global_planner.c_str());
   RCLCPP_INFO(this->get_logger(), "Result: %d", result);
   RCLCPP_INFO(this->get_logger(), "Cost (final node's g): %f", final_g_);
-  RCLCPP_INFO(this->get_logger(), "Total replanning time [ms]: %f", replanning_computation_time_ * 1000.0);
+  RCLCPP_INFO(this->get_logger(), "Total replanning time [ms]: %f",
+              replanning_computation_time_ * 1000.0);
   RCLCPP_INFO(this->get_logger(), "Global Planning Time [ms]: %f", global_planning_time_);
   RCLCPP_INFO(this->get_logger(), "CVX Decomposition Time [ms]: %f", cvx_decomp_time_);
   RCLCPP_INFO(this->get_logger(), "Initial Guess Time [ms]: %f", initial_guess_computation_time_);
@@ -1712,8 +2028,7 @@ void MIGHTY_NODE::printComputationTime(bool result)
   RCLCPP_INFO(this->get_logger(), "Safety Check Time [ms]: %f", safety_check_time_);
   RCLCPP_INFO(this->get_logger(), "Yaw Sequence Time [ms]: %f", yaw_sequence_time_);
   RCLCPP_INFO(this->get_logger(), "Yaw Fitting Time [ms]: %f", yaw_fitting_time_);
-  if (par_.global_planner == "dgp")
-  {
+  if (par_.global_planner == "hgp") {
     RCLCPP_INFO(this->get_logger(), "Static JPS Time [ms]: %f", hgp_static_jps_time_);
     RCLCPP_INFO(this->get_logger(), "Check Path Time [ms]: %f", hgp_check_path_time_);
     RCLCPP_INFO(this->get_logger(), "Dynamic A* Time [ms]: %f", hgp_dynamic_astar_time_);
@@ -1728,18 +2043,22 @@ void MIGHTY_NODE::printComputationTime(bool result)
  * @brief Record the data
  * @param result result of the replanning
  */
-void MIGHTY_NODE::recordData(bool result)
-{
-
+void MIGHTY_NODE::recordData(bool result) {
   // Record all the data into global_path_benchmark_
-  std::tuple<bool, double, double, double, double, double, double, double, double, double, double, double, double, double, double> data;
-  if (par_.global_planner == "dgp")
-  {
-    data = std::make_tuple(result, final_g_, replanning_computation_time_, global_planning_time_, cvx_decomp_time_, initial_guess_computation_time_, local_traj_computation_time_, safe_paths_time_, safety_check_time_, yaw_sequence_time_, yaw_fitting_time_, hgp_static_jps_time_, hgp_check_path_time_, hgp_dynamic_astar_time_, hgp_recover_path_time_);
-  }
-  else
-  {
-    data = std::make_tuple(result, final_g_, replanning_computation_time_, global_planning_time_, cvx_decomp_time_, initial_guess_computation_time_, local_traj_computation_time_, safe_paths_time_, safety_check_time_, yaw_sequence_time_, yaw_fitting_time_, 0.0, 0.0, 0.0, 0.0);
+  std::tuple<bool, double, double, double, double, double, double, double, double, double, double,
+             double, double, double, double>
+      data;
+  if (par_.global_planner == "hgp") {
+    data = std::make_tuple(result, final_g_, replanning_computation_time_, global_planning_time_,
+                           cvx_decomp_time_, initial_guess_computation_time_,
+                           local_traj_computation_time_, safe_paths_time_, safety_check_time_,
+                           yaw_sequence_time_, yaw_fitting_time_, hgp_static_jps_time_,
+                           hgp_check_path_time_, hgp_dynamic_astar_time_, hgp_recover_path_time_);
+  } else {
+    data = std::make_tuple(result, final_g_, replanning_computation_time_, global_planning_time_,
+                           cvx_decomp_time_, initial_guess_computation_time_,
+                           local_traj_computation_time_, safe_paths_time_, safety_check_time_,
+                           yaw_sequence_time_, yaw_fitting_time_, 0.0, 0.0, 0.0, 0.0);
   }
 
   global_path_benchmark_.push_back(data);
@@ -1750,35 +2069,41 @@ void MIGHTY_NODE::recordData(bool result)
 /**
  * @brief Log the data to a csv file
  */
-void MIGHTY_NODE::logData()
-{
-
+void MIGHTY_NODE::logData() {
   // Loc the computation times to csv file
   // std::ofstream log_file(file_path_, std::ios_base::app); // Open the file in append mode
-  std::ofstream log_file(file_path_); // Open the file in overwrite mode
-  if (log_file.is_open())
-  {
-    if (par_.global_planner == "dgp")
-    {
+  std::ofstream log_file(file_path_);  // Open the file in overwrite mode
+  if (log_file.is_open()) {
+    if (par_.global_planner == "hgp") {
       // Header
-      log_file << "Planner,Result,Cost (final node's g),Total replanning time [ms],Global Planning Time [ms],CVX Decomposition Time [ms],Initial Guess Time [ms],Local Traj Time [ms],Safe Paths Time [ms],Safety Check Time [ms],Yaw Sequence Time [ms],Yaw Fitting Time [ms],Static JPS Time [ms],Check Path Time [ms],Dynamic A* Time [ms],Recover Path Time [ms]\n";
-    }
-    else
-    {
+      log_file << "Planner,Result,Cost (final node's g),Total replanning time [ms],Global Planning "
+                  "Time [ms],CVX Decomposition Time [ms],Initial Guess Time [ms],Local Traj Time "
+                  "[ms],Safe Paths Time [ms],Safety Check Time [ms],Yaw Sequence Time [ms],Yaw "
+                  "Fitting Time [ms],Static JPS Time [ms],Check Path Time [ms],Dynamic A* Time "
+                  "[ms],Recover Path Time [ms]\n";
+    } else {
       // Header
-      log_file << "Planner,Result,Cost (final node's g),Total replanning time [ms],Global Planning Time [ms],CVX Decomposition Time [ms],Initial Guess Time [ms],Local Traj Time [ms],Safe Paths Time [ms],Safety Check Time [ms],Yaw Sequence Time [ms],Yaw Fitting Time [ms]\n";
+      log_file << "Planner,Result,Cost (final node's g),Total replanning time [ms],Global Planning "
+                  "Time [ms],CVX Decomposition Time [ms],Initial Guess Time [ms],Local Traj Time "
+                  "[ms],Safe Paths Time [ms],Safety Check Time [ms],Yaw Sequence Time [ms],Yaw "
+                  "Fitting Time [ms]\n";
     }
 
     // Data
-    for (const auto &row : global_path_benchmark_)
-    {
-      if (par_.global_planner == "dgp")
-      {
-        log_file << par_.global_planner << "," << std::get<0>(row) << "," << std::get<1>(row) << "," << std::get<2>(row) * 1000.0 << "," << std::get<3>(row) << "," << std::get<4>(row) << "," << std::get<5>(row) << "," << std::get<6>(row) << "," << std::get<7>(row) << "," << std::get<8>(row) << "," << std::get<9>(row) << "," << std::get<10>(row) << "," << std::get<11>(row) << "," << std::get<12>(row) << "," << std::get<13>(row) << std::get<14>(row) << "\n";
-      }
-      else
-      {
-        log_file << par_.global_planner << "," << std::get<0>(row) << "," << std::get<1>(row) << "," << std::get<2>(row) * 1000.0 << "," << std::get<3>(row) << "," << std::get<4>(row) << "," << std::get<5>(row) << "," << std::get<6>(row) << "," << std::get<7>(row) << "," << std::get<8>(row) << "," << std::get<9>(row) << "," << std::get<10>(row) << "\n";
+    for (const auto& row : global_path_benchmark_) {
+      if (par_.global_planner == "hgp") {
+        log_file << par_.global_planner << "," << std::get<0>(row) << "," << std::get<1>(row) << ","
+                 << std::get<2>(row) * 1000.0 << "," << std::get<3>(row) << "," << std::get<4>(row)
+                 << "," << std::get<5>(row) << "," << std::get<6>(row) << "," << std::get<7>(row)
+                 << "," << std::get<8>(row) << "," << std::get<9>(row) << "," << std::get<10>(row)
+                 << "," << std::get<11>(row) << "," << std::get<12>(row) << "," << std::get<13>(row)
+                 << std::get<14>(row) << "\n";
+      } else {
+        log_file << par_.global_planner << "," << std::get<0>(row) << "," << std::get<1>(row) << ","
+                 << std::get<2>(row) * 1000.0 << "," << std::get<3>(row) << "," << std::get<4>(row)
+                 << "," << std::get<5>(row) << "," << std::get<6>(row) << "," << std::get<7>(row)
+                 << "," << std::get<8>(row) << "," << std::get<9>(row) << "," << std::get<10>(row)
+                 << "\n";
       }
     }
 
@@ -1791,9 +2116,7 @@ void MIGHTY_NODE::logData()
 /**
  * @brief Publish the Point G (sub goal)
  */
-void MIGHTY_NODE::publishPointG() const
-{
-
+void MIGHTY_NODE::publishPointG() const {
   // get projected goal (G)
   state G;
   mighty_ptr_->getG(G);
@@ -1807,9 +2130,7 @@ void MIGHTY_NODE::publishPointG() const
 /**
  * @brief Publish the Point E (sub goal)
  */
-void MIGHTY_NODE::publishPointE() const
-{
-
+void MIGHTY_NODE::publishPointE() const {
   // get projected goal (E)
   state E;
   mighty_ptr_->getE(E);
@@ -1823,9 +2144,7 @@ void MIGHTY_NODE::publishPointE() const
 /**
  * @brief Publish the Point A (trajectory start point)
  */
-void MIGHTY_NODE::publishPointA() const
-{
-
+void MIGHTY_NODE::publishPointA() const {
   // get projected goal (A)
   state A;
   mighty_ptr_->getA(A);
@@ -1839,8 +2158,7 @@ void MIGHTY_NODE::publishPointA() const
 /**
  * @brief Publish the current state
  */
-void MIGHTY_NODE::publishCurrentState(const state &state) const
-{
+void MIGHTY_NODE::publishCurrentState(const state& state) const {
   // Publish the goal for visualization
   publishState(state, pub_current_state_);
 }
@@ -1850,8 +2168,9 @@ void MIGHTY_NODE::publishCurrentState(const state &state) const
 /**
  * @brief Publish state
  */
-void MIGHTY_NODE::publishState(const state &data, const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &publisher) const
-{
+void MIGHTY_NODE::publishState(
+    const state& data,
+    const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr& publisher) const {
   geometry_msgs::msg::PointStamped p;
   p.header.frame_id = par_.map_frame_id;
   p.header.stamp = this->now();
@@ -1864,24 +2183,19 @@ void MIGHTY_NODE::publishState(const state &data, const rclcpp::Publisher<geomet
 /**
  * @brief Publish its own trajectory for deconfliction
  */
-void MIGHTY_NODE::publishOwnTraj()
-{
-
+void MIGHTY_NODE::publishOwnTraj() {
   // Get the piecewise quintic polynomial trajectory to share
   mighty_ptr_->getPiecewiseQuinticPol(pwp_to_share_);
 
   // Apply simulated frame offset (for testing frame alignment in fake_sim).
   // This pre-rotates the trajectory into the agent's own (simulated) frame,
   // so that the receiver's frame alignment can correct it back.
-  if (par_.use_frame_alignment && !sim_frame_offset_.isIdentity(1e-9))
-  {
+  if (par_.use_frame_alignment && !sim_frame_offset_.isIdentity(1e-9)) {
     Eigen::Matrix3d R = sim_frame_offset_.block<3, 3>(0, 0);
-    for (size_t i = 0; i < pwp_to_share_.coeff_x.size(); i++)
-    {
+    for (size_t i = 0; i < pwp_to_share_.coeff_x.size(); i++) {
       for (int j = 0; j < 5; j++)  // non-constant: rotate only
       {
-        Eigen::Vector3d c(pwp_to_share_.coeff_x[i](j),
-                          pwp_to_share_.coeff_y[i](j),
+        Eigen::Vector3d c(pwp_to_share_.coeff_x[i](j), pwp_to_share_.coeff_y[i](j),
                           pwp_to_share_.coeff_z[i](j));
         c = R * c;
         pwp_to_share_.coeff_x[i](j) = c.x();
@@ -1890,8 +2204,8 @@ void MIGHTY_NODE::publishOwnTraj()
       }
       // constant term (j=5): full transform (rotation + translation)
       Eigen::Vector4d h;
-      h << pwp_to_share_.coeff_x[i](5), pwp_to_share_.coeff_y[i](5),
-           pwp_to_share_.coeff_z[i](5), 1.0;
+      h << pwp_to_share_.coeff_x[i](5), pwp_to_share_.coeff_y[i](5), pwp_to_share_.coeff_z[i](5),
+          1.0;
       h = sim_frame_offset_ * h;
       pwp_to_share_.coeff_x[i](5) = h(0);
       pwp_to_share_.coeff_y[i](5) = h(1);
@@ -1916,17 +2230,14 @@ void MIGHTY_NODE::publishOwnTraj()
   mighty_ptr_->getG(G);
 
   // Apply sim frame offset to the goal as well
-  if (par_.use_frame_alignment && !sim_frame_offset_.isIdentity(1e-9))
-  {
+  if (par_.use_frame_alignment && !sim_frame_offset_.isIdentity(1e-9)) {
     Eigen::Vector4d g;
     g << G.pos(0), G.pos(1), G.pos(2), 1.0;
     g = sim_frame_offset_ * g;
     msg.goal.push_back(g(0));
     msg.goal.push_back(g(1));
     msg.goal.push_back(g(2));
-  }
-  else
-  {
+  } else {
     msg.goal.push_back(G.pos(0));
     msg.goal.push_back(G.pos(1));
     msg.goal.push_back(G.pos(2));
@@ -1939,93 +2250,95 @@ void MIGHTY_NODE::publishOwnTraj()
 // ----------------------------------------------------------------------------
 
 /**
- * @brief Publish the trajectory the agent actually followed for visualization
+ * @brief Publish the trajectory the agent actually followed.
+ *
+ * Sando-style: keep a bounded history of past states and re-publish a single
+ * persistent LINE_STRIP marker (id=1) colored by speed each call. RViz only
+ * has to render one marker (downsampled to ~max_points_vis_), and there's no
+ * marker accumulation between cycles.
+ *
+ * The previous implementation published a fresh ARROW Marker per sample with
+ * an ever-incrementing id, which leaked thousands of markers into RViz, was
+ * impossible to clean up reliably, and had a per-message Marker (not
+ * MarkerArray) topic type — causing the rosbag "topic has more than one type"
+ * error whenever a sando-style consumer was on the same graph.
  */
-void MIGHTY_NODE::publishActualTraj()
-{
-  // Initialize the previous point
-  static geometry_msgs::msg::Point prev_p = pointOrigin();
+void MIGHTY_NODE::publishActualTraj() {
+  if (!pub_actual_traj_) return;
 
-  // Get the current state and position
   state current_state;
   mighty_ptr_->getState(current_state);
-  Eigen::Vector3d current_pos = current_state.pos;
+  const Eigen::Vector3d current_pos = current_state.pos;
 
-  if (current_pos.norm() < 1e-2)
-    return; // because the state is not updated yet
+  // Skip until the state is actually populated.
+  if (current_pos.norm() < 1e-2) return;
 
-  // If we use UAV, we can just use the state topic published by fake_sim, but if we use ground robot, since we use TF for state publisher, we cannot get velocity info from the state topic. So we will approximiate
-  if (par_.vehicle_type != "uav")
-  {
+  const auto now = this->now();
+  const double tnow = now.seconds();
 
-    // Initialize the previous position and time
-    if (!publish_actual_traj_called_)
-    {
-      actual_traj_prev_pos_ = current_pos;
-      actual_traj_prev_time_ = this->now().seconds();
-      publish_actual_traj_called_ = true;
-      return;
+  // Initialize on first valid sample.
+  if (!actual_traj_initialized_) {
+    actual_traj_prev_pos_  = current_pos;
+    actual_traj_prev_time_ = tnow;
+
+    // Ground-robot velocity is unknown on the very first sample.
+    if (par_.vehicle_type != "uav") current_state.vel.setZero();
+
+    actual_traj_hist_.clear();
+    actual_traj_hist_.push_back(current_state);
+    actual_traj_initialized_ = true;
+    return;  // wait for second sample to draw a line
+  }
+
+  // Velocity handling:
+  //   UAV       -> trust current_state.vel from the estimator/sim
+  //   Ground    -> approximate from position diff (TF-based state publisher)
+  if (par_.vehicle_type != "uav") {
+    const double dt = tnow - actual_traj_prev_time_;
+    if (dt > 1e-3)
+      current_state.vel = (current_pos - actual_traj_prev_pos_) / dt;
+    else
+      current_state.vel.setZero();
+  }
+
+  actual_traj_prev_pos_  = current_pos;
+  actual_traj_prev_time_ = tnow;
+
+  // Append to history only if it moved enough — prevents dense duplicates
+  // when the robot is stationary. Still update the latest sample's velocity
+  // so colors stay accurate.
+  const double eps = 1e-3;
+  if (!actual_traj_hist_.empty()) {
+    const Eigen::Vector3d last_pos = actual_traj_hist_.back().pos;
+    if ((current_pos - last_pos).norm() < eps) {
+      actual_traj_hist_.back().vel = current_state.vel;
+    } else {
+      actual_traj_hist_.push_back(current_state);
     }
-
-    // Get the velocity
-    current_state.vel = (current_pos - actual_traj_prev_pos_) / (this->now().seconds() - actual_traj_prev_time_);
+  } else {
+    actual_traj_hist_.push_back(current_state);
   }
 
-  // Set up the marker
-  visualization_msgs::msg::Marker m;
-  m.type = visualization_msgs::msg::Marker::ARROW;
-  m.action = visualization_msgs::msg::Marker::ADD;
-  m.id = actual_traj_id_;
-  m.ns = "actual_traj_" + id_str_;
-  m.color = getColorJet(current_state.vel.norm(), 0, par_.v_max); // note that par_.v_max is per axis
-  m.scale.x = 0.15;
-  m.scale.y = 0.0001;
-  m.scale.z = 0.0001;
-  m.header.stamp = this->now();
-  m.header.frame_id = par_.map_frame_id;
-
-  // pose is actually not used in the marker, but if not RVIZ complains about the quaternion
-  m.pose.position = pointOrigin();
-  m.pose.orientation.x = 0.0;
-  m.pose.orientation.y = 0.0;
-  m.pose.orientation.z = 0.0;
-  m.pose.orientation.w = 1.0;
-
-  // Set the points
-  geometry_msgs::msg::Point p;
-  p = mighty_utils::convertEigen2Point(current_pos);
-  m.points.push_back(prev_p);
-  m.points.push_back(p);
-  prev_p = p;
-
-  // Return if the actual_traj_id_ is 0 - avoid publishing the first point which goes from the origin to the first point
-  if (actual_traj_id_ == 0)
-  {
-    actual_traj_id_++;
-    return;
+  // Bound history to keep RViz responsive.
+  if (actual_traj_hist_.size() > actual_traj_max_hist_) {
+    const size_t overflow = actual_traj_hist_.size() - actual_traj_max_hist_;
+    actual_traj_hist_.erase(actual_traj_hist_.begin(),
+                            actual_traj_hist_.begin() + overflow);
   }
-  actual_traj_id_++;
 
-  // Publish the marker
-  pub_actual_traj_->publish(m);
-}
+  // Build a single persistent colored LINE_STRIP. par_.v_max is per-axis;
+  // matching sando we use it directly as the jet-colormap max.
+  const double vmax_for_color = par_.v_max;
+  visualization_msgs::msg::MarkerArray ma = stateVector2ColoredLineStripMarkerArray(
+      actual_traj_hist_,
+      /*id=*/1,
+      /*ns=*/"actual_traj_" + id_str_,
+      /*max_value=*/vmax_for_color,
+      /*stamp=*/now,
+      /*line_width=*/actual_traj_line_width_,
+      /*max_points_vis=*/actual_traj_max_points_vis_);
 
-// ----------------------------------------------------------------------------
-
-/**
- * @brief Clear the marker array
- */
-void MIGHTY_NODE::clearMarkerActualTraj()
-{
-  visualization_msgs::msg::Marker m;
-  m.type = visualization_msgs::msg::Marker::ARROW;
-  m.action = visualization_msgs::msg::Marker::DELETEALL;
-  m.id = 0;
-  m.scale.x = 0.02;
-  m.scale.y = 0.04;
-  m.scale.z = 1;
-  pub_actual_traj_->publish(m);
-  actual_traj_id_ = 0;
+  pub_actual_traj_->publish(ma);
 }
 
 // ----------------------------------------------------------------------------
@@ -2033,16 +2346,12 @@ void MIGHTY_NODE::clearMarkerActualTraj()
 /**
  * @brief Publish goal (setpoint)
  */
-void MIGHTY_NODE::publishGoal()
-{
-
+void MIGHTY_NODE::publishGoal() {
   // Initialize the goal
   state next_goal;
 
   // Get the next goal
-  if (mighty_ptr_->getNextGoal(next_goal) && par_.use_state_update)
-  {
-
+  if (mighty_ptr_->getNextGoal(next_goal) && par_.use_state_update) {
     // Publish the goal (actual setpoint)
     dynus_interfaces::msg::Goal quadGoal;
     quadGoal.header.stamp = this->now();
@@ -2056,13 +2365,11 @@ void MIGHTY_NODE::publishGoal()
     pub_goal_->publish(quadGoal);
 
     // Publish the goal (setpoint) for visualization
-    if (par_.visual_level >= 1)
-      publishState(next_goal, pub_setpoint_);
+    if (par_.visual_level >= 1) publishState(next_goal, pub_setpoint_);
   }
 
   // Publish FOV
-  if (par_.visual_level >= 1)
-    publishFOV();
+  if (par_.visual_level >= 1) publishFOV();
 }
 
 // ----------------------------------------------------------------------------
@@ -2070,13 +2377,11 @@ void MIGHTY_NODE::publishGoal()
 /**
  * @brief Publish the full trajectory for robust tracking with replan support
  */
-void MIGHTY_NODE::publishTrajectory()
-{
+void MIGHTY_NODE::publishTrajectory() {
   // Retrieve the goal setpoints (full trajectory)
   mighty_ptr_->retrieveGoalSetpoints(goal_setpoints_);
 
-  if (goal_setpoints_.empty())
-  {
+  if (goal_setpoints_.empty()) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                          "Cannot publish trajectory: goal_setpoints_ is empty");
     return;
@@ -2099,8 +2404,7 @@ void MIGHTY_NODE::publishTrajectory()
 
   // Downsample: take every 'step' points
   traj_msg.goals.reserve(target_points);
-  for (size_t i = 0; i < goal_setpoints_.size(); i += step)
-  {
+  for (size_t i = 0; i < goal_setpoints_.size(); i += step) {
     const auto& state_point = goal_setpoints_[i];
     dynus_interfaces::msg::Goal goal;
     goal.p = eigen2rosvector(state_point.pos);
@@ -2113,8 +2417,7 @@ void MIGHTY_NODE::publishTrajectory()
   }
 
   // Always include the last point
-  if (!goal_setpoints_.empty() && (goal_setpoints_.size() - 1) % step != 0)
-  {
+  if (!goal_setpoints_.empty() && (goal_setpoints_.size() - 1) % step != 0) {
     const auto& last_point = goal_setpoints_.back();
     dynus_interfaces::msg::Goal goal;
     goal.p = eigen2rosvector(last_point.pos);
@@ -2208,16 +2511,14 @@ void MIGHTY_NODE::publishMpcPath() {
 /**
  * @brief Publish Sefe Corridor Polyhedra
  */
-void MIGHTY_NODE::publishPoly()
-{
-
+void MIGHTY_NODE::publishPoly() {
   // retrieve the polyhedra
   mighty_ptr_->retrievePolytopes(poly_whole_, poly_safe_);
 
   // For whole trajectory
-  if (!poly_whole_.empty())
-  {
-    decomp_ros_msgs::msg::PolyhedronArray poly_whole_msg = DecompROS::polyhedron_array_to_ros(poly_whole_);
+  if (!poly_whole_.empty()) {
+    decomp_ros_msgs::msg::PolyhedronArray poly_whole_msg =
+        DecompROS::polyhedron_array_to_ros(poly_whole_);
     poly_whole_msg.header.stamp = this->now();
     poly_whole_msg.header.frame_id = par_.map_frame_id;
     poly_whole_msg.lifetime = rclcpp::Duration::from_seconds(1.0);
@@ -2225,9 +2526,9 @@ void MIGHTY_NODE::publishPoly()
   }
 
   // For safe trajectory
-  if (!poly_safe_.empty())
-  {
-    decomp_ros_msgs::msg::PolyhedronArray poly_safe_msg = DecompROS::polyhedron_array_to_ros(poly_safe_);
+  if (!poly_safe_.empty()) {
+    decomp_ros_msgs::msg::PolyhedronArray poly_safe_msg =
+        DecompROS::polyhedron_array_to_ros(poly_safe_);
     poly_safe_msg.header.stamp = this->now();
     poly_safe_msg.header.frame_id = par_.map_frame_id;
     poly_safe_msg.lifetime = rclcpp::Duration::from_seconds(1.0);
@@ -2240,56 +2541,54 @@ void MIGHTY_NODE::publishPoly()
 /**
  * @brief Publish the trajectory
  */
-void MIGHTY_NODE::publishTraj()
-{
+void MIGHTY_NODE::publishTraj() {
   auto now = this->now();
 
-  // 1) DELETEALL on both topics
-  {
-    visualization_msgs::msg::MarkerArray clear_msg;
-    visualization_msgs::msg::Marker clear_m;
-    clear_m.header.frame_id = par_.map_frame_id;
-    clear_m.header.stamp = now;
-    clear_m.action = visualization_msgs::msg::Marker::DELETEALL;
-    clear_msg.markers.push_back(clear_m);
+  // Build ONE MarkerArray that contains DELETEALL followed by the new markers,
+  // for each topic. Publishing DELETEALL and the new markers as two separate
+  // messages was racy: if the second message was dropped or arrived out of
+  // order, RViz would show an empty topic. A single MarkerArray is processed
+  // atomically — RViz applies DELETEALL first, then the ADDs that follow.
+  auto deleteAll = [&]() {
+    visualization_msgs::msg::Marker m;
+    m.header.frame_id = par_.map_frame_id;
+    m.header.stamp    = rclcpp::Time(0, 0, RCL_ROS_TIME);  // latest TF
+    m.action          = visualization_msgs::msg::Marker::DELETEALL;
+    return m;
+  };
 
-    pub_traj_committed_colored_->publish(clear_msg);
-    pub_traj_subopt_colored_->publish(clear_msg);
-  }
-
-  // 2) Publish the committed (best) trajectory
+  // 1) Committed (best) trajectory
   mighty_ptr_->retrieveGoalSetpoints(goal_setpoints_);
   {
-    auto committed_ma = stateVector2ColoredMarkerArray(
-        goal_setpoints_,
-        /*type=*/1,
-        par_.v_max,
-        now,
-        par_.map_frame_id);
+    visualization_msgs::msg::MarkerArray committed_ma;
+    committed_ma.markers.push_back(deleteAll());
+    auto added = stateVector2ColoredMarkerArray(
+        goal_setpoints_, /*type=*/1, par_.v_max, now, par_.map_frame_id);
+    committed_ma.markers.insert(committed_ma.markers.end(),
+                                added.markers.begin(), added.markers.end());
     pub_traj_committed_colored_->publish(committed_ma);
   }
 
-  // 3) Publish all sub-optimal trajectories
-  if (par_.use_multiple_initial_guesses)
-  {
+  // 2) Sub-optimal trajectories
+  if (par_.use_multiple_initial_guesses) {
     mighty_ptr_->retrieveListSubOptGoalSetpoints(list_subopt_goal_setpoints_);
 
     visualization_msgs::msg::MarkerArray subopt_ma;
-    for (int i = 0; i < (int)list_subopt_goal_setpoints_.size(); ++i)
-    {
-      auto single = stateVector2ColoredMarkerArray(
-          list_subopt_goal_setpoints_[i],
-          /*type=*/i + 2,
-          par_.v_max,
-          now,
-          par_.map_frame_id);
-      // append all markers from this one:
-      subopt_ma.markers.insert(
-          subopt_ma.markers.end(),
-          single.markers.begin(),
-          single.markers.end());
+    subopt_ma.markers.push_back(deleteAll());
+    for (int i = 0; i < (int)list_subopt_goal_setpoints_.size(); ++i) {
+      auto single =
+          stateVector2ColoredMarkerArray(list_subopt_goal_setpoints_[i],
+                                         /*type=*/i + 2, par_.v_max, now, par_.map_frame_id);
+      subopt_ma.markers.insert(subopt_ma.markers.end(), single.markers.begin(),
+                               single.markers.end());
     }
     pub_traj_subopt_colored_->publish(subopt_ma);
+  } else {
+    // Even when subopt is disabled, still publish a DELETEALL so the topic
+    // doesn't accumulate stale markers from a previous toggle.
+    visualization_msgs::msg::MarkerArray clear_only;
+    clear_only.markers.push_back(deleteAll());
+    pub_traj_subopt_colored_->publish(clear_only);
   }
 }
 
@@ -2298,58 +2597,54 @@ void MIGHTY_NODE::publishTraj()
 /**
  * @brief Publish the global path (that can go through unknown space)
  */
-void MIGHTY_NODE::publishGlobalPath()
-{
-
+void MIGHTY_NODE::publishGlobalPath() {
   int global_path_color = RED;
   int original_global_path_color = ORANGE;
 
   // Generate random integer from 1 to 10 to generate random color
-  if (par_.use_random_color_for_global_path)
-    global_path_color = rand() % 10 + 1;
+  if (par_.use_random_color_for_global_path) global_path_color = rand() % 10 + 1;
 
   // Get global_path
   vec_Vecf<3> global_path;
   mighty_ptr_->getGlobalPath(global_path);
 
-  if (!global_path.empty())
-  {
+  if (!global_path.empty()) {
     // Publish global_path (thin line + dots)
-    clearMarkerArray(dgp_path_marker_, pub_dgp_path_marker_);
+    clearMarkerArray(hgp_path_marker_, pub_hgp_path_marker_);
 
-    pathLineDotsToMarkerArray(
-        global_path,
-        &dgp_path_marker_,
-        color(global_path_color),
-        /*line_width=*/0.03,   // meters
-        /*dot_diameter=*/0.06, // meters
-        /*base_id=*/50000,
-        /*frame_id=*/par_.map_frame_id,
-        /*lifetime_sec=*/1.0);
+    pathLineDotsToMarkerArray(global_path, &hgp_path_marker_, color(global_path_color),
+                              /*line_width=*/0.03,    // meters
+                              /*dot_diameter=*/0.06,  // meters
+                              /*base_id=*/50000,
+                              /*frame_id=*/par_.map_frame_id,
+                              // Long lifetime so the path stays visible across
+                              // intermittent HGP failures (which are common
+                              // when the robot is near the edge of the local
+                              // mapper window). The next successful publish
+                              // calls clearMarkerArray to wipe stale markers,
+                              // so we don't accumulate.
+                              /*lifetime_sec=*/10.0);
 
-    pub_dgp_path_marker_->publish(dgp_path_marker_);
+    pub_hgp_path_marker_->publish(hgp_path_marker_);
   }
 
   // Get the original global path
   vec_Vecf<3> original_global_path;
   mighty_ptr_->getOriginalGlobalPath(original_global_path);
 
-  if (!original_global_path.empty())
-  {
+  if (!original_global_path.empty()) {
     // Publish original_global_path (thin line + dots)
-    clearMarkerArray(original_dgp_path_marker_, pub_original_dgp_path_marker_);
+    clearMarkerArray(original_hgp_path_marker_, pub_original_hgp_path_marker_);
 
-    pathLineDotsToMarkerArray(
-        original_global_path,
-        &original_dgp_path_marker_,
-        color(original_global_path_color),
-        /*line_width=*/0.03,   // meters
-        /*dot_diameter=*/0.06, // meters
-        /*base_id=*/60000,
-        /*frame_id=*/par_.map_frame_id,
-        /*lifetime_sec=*/1.0);
+    pathLineDotsToMarkerArray(original_global_path, &original_hgp_path_marker_,
+                              color(original_global_path_color),
+                              /*line_width=*/0.03,    // meters
+                              /*dot_diameter=*/0.06,  // meters
+                              /*base_id=*/60000,
+                              /*frame_id=*/par_.map_frame_id,
+                              /*lifetime_sec=*/10.0);
 
-    pub_original_dgp_path_marker_->publish(original_dgp_path_marker_);
+    pub_original_hgp_path_marker_->publish(original_hgp_path_marker_);
   }
 }
 
@@ -2358,21 +2653,18 @@ void MIGHTY_NODE::publishGlobalPath()
 /**
  * @brief Publish the free global path (that only goes through free space)
  */
-void MIGHTY_NODE::publishFreeGlobalPath()
-{
-
+void MIGHTY_NODE::publishFreeGlobalPath() {
   // Get free_global_path
   vec_Vecf<3> free_global_path;
   mighty_ptr_->getFreeGlobalPath(free_global_path);
 
-  if (free_global_path.empty())
-    return;
+  if (free_global_path.empty()) return;
 
   // Publish free_global_path
-  clearMarkerArray(dgp_free_path_marker_, pub_free_dgp_path_marker_);
-  vectorOfVectors2MarkerArray(free_global_path, &dgp_free_path_marker_, color(GREEN),
-                             visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
-  pub_free_dgp_path_marker_->publish(dgp_free_path_marker_);
+  clearMarkerArray(hgp_free_path_marker_, pub_free_hgp_path_marker_);
+  vectorOfVectors2MarkerArray(free_global_path, &hgp_free_path_marker_, color(GREEN),
+                              visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
+  pub_free_hgp_path_marker_->publish(hgp_free_path_marker_);
 }
 
 // ----------------------------------------------------------------------------
@@ -2380,30 +2672,28 @@ void MIGHTY_NODE::publishFreeGlobalPath()
 /**
  * @brief Publish the local_global_path and local_global_path_after_push_
  */
-void MIGHTY_NODE::publishLocalGlobalPath()
-{
-
+void MIGHTY_NODE::publishLocalGlobalPath() {
   // Get the local global path and local global path after push
   vec_Vecf<3> local_global_path;
   vec_Vecf<3> local_global_path_after_push;
   mighty_ptr_->getLocalGlobalPath(local_global_path, local_global_path_after_push);
 
-  if (!local_global_path.empty())
-  {
+  if (!local_global_path.empty()) {
     // Publish local_global_path
-    clearMarkerArray(dgp_local_global_path_marker_, pub_local_global_path_marker_);
-    vectorOfVectors2MarkerArray(local_global_path, &dgp_local_global_path_marker_, color(BLUE),
-                               visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
-    pub_local_global_path_marker_->publish(dgp_local_global_path_marker_);
+    clearMarkerArray(hgp_local_global_path_marker_, pub_local_global_path_marker_);
+    vectorOfVectors2MarkerArray(local_global_path, &hgp_local_global_path_marker_, color(BLUE),
+                                visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
+    pub_local_global_path_marker_->publish(hgp_local_global_path_marker_);
   }
 
-  if (!local_global_path_after_push.empty())
-  {
+  if (!local_global_path_after_push.empty()) {
     // Publish local_global_path_after_push
-    clearMarkerArray(dgp_local_global_path_after_push_marker_, pub_local_global_path_after_push_marker_);
-    vectorOfVectors2MarkerArray(local_global_path_after_push, &dgp_local_global_path_after_push_marker_, color(ORANGE),
-                               visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
-    pub_local_global_path_after_push_marker_->publish(dgp_local_global_path_after_push_marker_);
+    clearMarkerArray(hgp_local_global_path_after_push_marker_,
+                     pub_local_global_path_after_push_marker_);
+    vectorOfVectors2MarkerArray(local_global_path_after_push,
+                                &hgp_local_global_path_after_push_marker_, color(ORANGE),
+                                visualization_msgs::msg::Marker::ARROW, {}, par_.map_frame_id);
+    pub_local_global_path_after_push_marker_->publish(hgp_local_global_path_after_push_marker_);
   }
 }
 
@@ -2413,23 +2703,22 @@ void MIGHTY_NODE::publishLocalGlobalPath()
  * @brief Create MarkerArray from vec_Vec3f
  */
 void MIGHTY_NODE::createMarkerArrayFromVec_Vec3f(
-    const vec_Vec3f &occupied_cells, const std_msgs::msg::ColorRGBA &color, int namespace_id, double scale, visualization_msgs::msg::MarkerArray *marker_array)
-{
-
+    const vec_Vec3f& occupied_cells, const std_msgs::msg::ColorRGBA& color, int namespace_id,
+    double scale, visualization_msgs::msg::MarkerArray* marker_array) {
   visualization_msgs::msg::Marker marker;
   marker.header.frame_id = par_.map_frame_id;
-  marker.header.stamp = rclcpp::Clock().now(); // Use ROS2 clock
+  marker.header.stamp = rclcpp::Clock().now();  // Use ROS2 clock
   marker.ns = "namespace_" + std::to_string(namespace_id);
   marker.id = 0;
-  marker.type = visualization_msgs::msg::Marker::CUBE_LIST; // Each point will be visualized as a cube
+  marker.type =
+      visualization_msgs::msg::Marker::CUBE_LIST;  // Each point will be visualized as a cube
   marker.action = visualization_msgs::msg::Marker::ADD;
   marker.scale.x = par_.res;
   marker.scale.y = par_.res;
   marker.scale.z = par_.res;
   marker.color = color;
 
-  for (const auto &cell : occupied_cells)
-  {
+  for (const auto& cell : occupied_cells) {
     geometry_msgs::msg::Point point;
     point.x = cell(0);
     point.y = cell(1);
@@ -2445,18 +2734,16 @@ void MIGHTY_NODE::createMarkerArrayFromVec_Vec3f(
 /**
  * @brief Clear any marker array
  */
-void MIGHTY_NODE::clearMarkerArray(visualization_msgs::msg::MarkerArray &path_marker, rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr publisher)
-{
-
+void MIGHTY_NODE::clearMarkerArray(
+    visualization_msgs::msg::MarkerArray& path_marker,
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr publisher) {
   // If the marker array is empty, return
-  if (path_marker.markers.size() == 0)
-    return;
+  if (path_marker.markers.size() == 0) return;
 
   // Clear the marker array
   int id_begin = path_marker.markers[0].id;
 
-  for (int i = 0; i < path_marker.markers.size(); i++)
-  {
+  for (int i = 0; i < path_marker.markers.size(); i++) {
     visualization_msgs::msg::Marker m;
     m.type = visualization_msgs::msg::Marker::ARROW;
     m.action = visualization_msgs::msg::Marker::DELETE;
@@ -2473,9 +2760,7 @@ void MIGHTY_NODE::clearMarkerArray(visualization_msgs::msg::MarkerArray &path_ma
 /**
  * @brief Construct the FOV marker for visualization
  */
-void MIGHTY_NODE::constructFOVMarker()
-{
-
+void MIGHTY_NODE::constructFOVMarker() {
   marker_fov_.header.stamp = this->now();
   marker_fov_.header.frame_id = d435_depth_frame_id_;
   marker_fov_.ns = "marker_fov";
@@ -2489,10 +2774,14 @@ void MIGHTY_NODE::constructFOVMarker()
   double delta_z = par_.fov_visual_depth * fabs(tan((par_.fov_visual_y_deg * M_PI / 180) / 2.0));
 
   geometry_msgs::msg::Point v0 = eigen2point(Eigen::Vector3d(0.0, 0.0, 0.0));
-  geometry_msgs::msg::Point v1 = eigen2point(Eigen::Vector3d(-delta_y, delta_z, par_.fov_visual_depth));
-  geometry_msgs::msg::Point v2 = eigen2point(Eigen::Vector3d(delta_y, delta_z, par_.fov_visual_depth));
-  geometry_msgs::msg::Point v3 = eigen2point(Eigen::Vector3d(delta_y, -delta_z, par_.fov_visual_depth));
-  geometry_msgs::msg::Point v4 = eigen2point(Eigen::Vector3d(-delta_y, -delta_z, par_.fov_visual_depth));
+  geometry_msgs::msg::Point v1 =
+      eigen2point(Eigen::Vector3d(-delta_y, delta_z, par_.fov_visual_depth));
+  geometry_msgs::msg::Point v2 =
+      eigen2point(Eigen::Vector3d(delta_y, delta_z, par_.fov_visual_depth));
+  geometry_msgs::msg::Point v3 =
+      eigen2point(Eigen::Vector3d(delta_y, -delta_z, par_.fov_visual_depth));
+  geometry_msgs::msg::Point v4 =
+      eigen2point(Eigen::Vector3d(-delta_y, -delta_z, par_.fov_visual_depth));
 
   marker_fov_.points.clear();
 
@@ -2542,8 +2831,7 @@ void MIGHTY_NODE::constructFOVMarker()
 /**
  * @brief Publish the FOV marker for visualization
  */
-void MIGHTY_NODE::publishFOV()
-{
+void MIGHTY_NODE::publishFOV() {
   marker_fov_.header.stamp = this->now();
   pub_fov_->publish(marker_fov_);
   return;
@@ -2551,12 +2839,10 @@ void MIGHTY_NODE::publishFOV()
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::mapCallback(
-    const sensor_msgs::msg::PointCloud2::ConstPtr &map_msg,
-    const sensor_msgs::msg::PointCloud2::ConstPtr &unk_msg)
-{
-
-  RCLCPP_INFO_ONCE(this->get_logger(), "mapCallback triggered — synced occupancy_grid + unknown_grid received");
+void MIGHTY_NODE::mapCallback(const sensor_msgs::msg::PointCloud2::ConstPtr& map_msg,
+                              const sensor_msgs::msg::PointCloud2::ConstPtr& unk_msg) {
+  RCLCPP_INFO_ONCE(this->get_logger(),
+                   "mapCallback triggered — synced occupancy_grid + unknown_grid received");
 
   // use PCL's own Ptr (boost::shared_ptr)
   pcl::PointCloud<pcl::PointXYZ>::Ptr map_pc(new pcl::PointCloud<pcl::PointXYZ>());
@@ -2568,8 +2854,7 @@ void MIGHTY_NODE::mapCallback(
   mighty_ptr_->updateMap(map_pc, unk_pc);
 
   // Publish heat cloud visualization if enabled
-  if (par_.use_heat_map)
-  {
+  if (par_.use_heat_map) {
     publishHeatCloud();
   }
   publishGround2DOccupied();
@@ -2578,9 +2863,7 @@ void MIGHTY_NODE::mapCallback(
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::occupancyMapCallback(
-    const sensor_msgs::msg::PointCloud2::ConstPtr &map_msg)
-{
+void MIGHTY_NODE::occupancyMapCallback(const sensor_msgs::msg::PointCloud2::ConstPtr& map_msg) {
   // use PCL's own Ptr (boost::shared_ptr)
   pcl::PointCloud<pcl::PointXYZ>::Ptr map_pc(new pcl::PointCloud<pcl::PointXYZ>());
   pcl::fromROSMsg(*map_msg, *map_pc);
@@ -2588,8 +2871,7 @@ void MIGHTY_NODE::occupancyMapCallback(
   mighty_ptr_->updateOccupancyMap(map_pc);
 
   // Publish heat cloud visualization if enabled
-  if (par_.use_heat_map)
-  {
+  if (par_.use_heat_map) {
     publishHeatCloud();
   }
   publishGround2DOccupied();
@@ -2598,37 +2880,465 @@ void MIGHTY_NODE::occupancyMapCallback(
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::unknownMapCallback(
-    const sensor_msgs::msg::PointCloud2::ConstPtr &unk_msg)
-{
+void MIGHTY_NODE::unknownMapCallback(const sensor_msgs::msg::PointCloud2::ConstPtr& unk_msg) {
   pcl::PointCloud<pcl::PointXYZ>::Ptr unk_pc(new pcl::PointCloud<pcl::PointXYZ>());
   pcl::fromROSMsg(*unk_msg, *unk_pc);
   mighty_ptr_->updateUnknownCloud(unk_pc);
 }
 
+void MIGHTY_NODE::esdfCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+  esdf_grid_ = EsdfGrid2D::fromOccupancyGrid(*msg, par_.esdf_truncation_distance);
+}
+
+void MIGHTY_NODE::occ2DCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+  // Persistent-map fusion: any cell that arrived UNKNOWN from the mapper but
+  // was previously observed (FREE or OCCUPIED) gets restored from
+  // visited_map_ before we build OccGrid2D. So when the robot revisits a
+  // previously-explored region, the sliding window comes back instantly with
+  // its last-known occupancy instead of one frame of UNKNOWN flicker. This
+  // re-introduces stale OCCUPIED for moving obstacles that have since left,
+  // so it's only safe in static environments — gated by a parameter.
+  // Mutating msg->data in place is safe here because (a) we're the only
+  // subscriber to occ_2d_topic in this process, (b) cb_group_map_ is now
+  // MutuallyExclusive, and (c) inter-process delivery gives us a unique copy.
+  if (visited_map_ && par_.expl_fuse_persistent_into_local && !msg->data.empty()) {
+    const double res = msg->info.resolution;
+    const double ox  = msg->info.origin.position.x;
+    const double oy  = msg->info.origin.position.y;
+    const unsigned W = msg->info.width;
+    const unsigned H = msg->info.height;
+    for (unsigned iy = 0; iy < H; ++iy) {
+      for (unsigned ix = 0; ix < W; ++ix) {
+        const size_t i = static_cast<size_t>(iy) * W + ix;
+        if (i >= msg->data.size()) break;
+        if (msg->data[i] >= 0) continue;  // already known (FREE or OCCUPIED)
+        const double wx = ox + (ix + 0.5) * res;
+        const double wy = oy + (iy + 0.5) * res;
+        const int8_t v = visited_map_->getStateWorld(wx, wy);
+        if (v != VisitedMap::kUnknown) {
+          msg->data[i] = v;  // restore old persistent value
+        }
+      }
+    }
+  }
+
+  occ_grid_2d_ = OccGrid2D::fromOccupancyGrid(*msg);
+  mighty_ptr_->setOccGrid2D(occ_grid_2d_);
+
+  // Frontier-based exploration: detect frontiers in the new grid, update the
+  // persistent global database, then immediately try to issue an exploration
+  // goal so the robot starts moving the moment the first frontier appears
+  // (instead of waiting up to 1 s for the explore-select timer tick).
+  if (par_.expl_enabled && occ_grid_2d_ && frontier_detector_ && frontier_manager_
+      && state_initialized_) {
+    state cur;
+    mighty_ptr_->getState(cur);
+    Eigen::Vector3d robot_pose(cur.pos.x(), cur.pos.y(), cur.yaw);
+    Eigen::Vector2d robot_xy(cur.pos.x(), cur.pos.y());
+
+    // Absorb the freshly observed cells into the persistent visited bitmap
+    // *before* running the detector, so cells we are observing right now are
+    // already marked visited and never become "stale unknown" on the next
+    // sliding step.
+    if (visited_map_) visited_map_->absorb(*occ_grid_2d_);
+
+    auto clusters = frontier_detector_->detect(*occ_grid_2d_, robot_xy,
+                                               visited_map_.get());
+
+    // ESDF-based clearance filter: drop frontiers whose centroid is closer
+    // than `expl_min_obstacle_distance_m` to the nearest obstacle. The ESDF
+    // gives a meter-accurate distance and matches what HGP/L-BFGS use for
+    // collision avoidance, so frontiers we keep are guaranteed to have
+    // breathing room from walls. Disabled when threshold <= 0 or no ESDF.
+    if (esdf_grid_ && par_.expl_min_obstacle_distance_m > 0.0) {
+      const double thresh = par_.expl_min_obstacle_distance_m;
+      clusters.erase(
+          std::remove_if(
+              clusters.begin(), clusters.end(),
+              [&](const FrontierCluster& c) {
+                return esdf_grid_->queryDistance(c.centroid.x(),
+                                                 c.centroid.y()) < thresh;
+              }),
+          clusters.end());
+    }
+
+    frontier_manager_->update(clusters, *occ_grid_2d_, robot_pose,
+                              this->now().seconds());
+
+    // Also retroactively invalidate existing records that drifted too close
+    // to obstacles (e.g. via EMA centroid updates) or that were inserted
+    // before the ESDF caught up. Without this, stale records that already
+    // hugged a wall would never be cleared.
+    if (esdf_grid_ && par_.expl_min_obstacle_distance_m > 0.0) {
+      const double thresh = par_.expl_min_obstacle_distance_m;
+      for (const auto& r : frontier_manager_->records()) {
+        if (r.state != FrontierState::ACTIVE &&
+            r.state != FrontierState::DORMANT) continue;
+        if (esdf_grid_->queryDistance(r.centroid_xy.x(),
+                                      r.centroid_xy.y()) < thresh) {
+          frontier_manager_->markInvalidated(r.id);
+        }
+      }
+    }
+
+    // Publish the persistent occupancy map ~1 Hz so RViz can layer it behind
+    // the sliding occ_2d. Throttling matters because each publish copies the
+    // full persistent buffer (~444 KB at the 100×100 m default; bigger if the
+    // user enlarges expl_visited_map_width_m / height_m) and the map only
+    // changes incrementally between frames. transient_local QoS guarantees
+    // late-joining RViz still gets the latest snapshot.
+    if (visited_map_ && par_.expl_publish_visited_map) {
+      const double t_now = this->now().seconds();
+      if (t_now - last_visited_publish_t_ >= 1.0) {
+        publishVisitedMap();
+        last_visited_publish_t_ = t_now;
+      }
+    }
+
+    // Throttled diagnostic so it's obvious whether detection is finding
+    // anything (and gives a hint about *why* if the answer is "no").
+    {
+      // Quick scan of the published grid for cell-state distribution.
+      int n_unknown = 0, n_free = 0, n_occ = 0;
+      const auto& occ = occ_grid_2d_->occupiedData();
+      const auto& unk = occ_grid_2d_->unknownData();
+      for (size_t i = 0; i < occ.size(); ++i) {
+        if (unk[i])      ++n_unknown;
+        else if (occ[i]) ++n_occ;
+        else             ++n_free;
+      }
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+          "[expl] grid %dx%d  free=%d  occ=%d  unknown=%d  fresh=%zu  db=%zu",
+          occ_grid_2d_->width(), occ_grid_2d_->height(),
+          n_free, n_occ, n_unknown, clusters.size(), frontier_manager_->size());
+    }
+
+    if (par_.expl_publish_markers) publishFrontierMarkers();
+
+    // Drive the goal-selection loop immediately. This makes the robot start
+    // moving as soon as the first frontier exists, rather than waiting for
+    // the next 1 Hz explore-select tick.
+    exploreSelectCallback();
+  }
+}
+
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::publishHeatCloud()
-{
-  if (!pub_heat_cloud_)
+/**
+ * @brief Frontier exploration: pick the next goal from the global frontier DB
+ *        and issue it through the same pathway as a manual term_goal. Skipped
+ *        when a manual goal is active or our own previous goal is still being
+ *        pursued.
+ */
+void MIGHTY_NODE::exploreSelectCallback() {
+  if (!par_.expl_enabled) return;
+  if (manual_goal_active_) return;
+  if (!occ_grid_2d_ || !frontier_manager_) return;
+  if (!state_initialized_) return;
+
+  // If we still have an in-progress exploration goal that hasn't been
+  // marked VISITED/INVALIDATED yet, leave it alone.
+  if (exploration_active_) {
+    auto* r = frontier_manager_->find(current_explore_id_);
+    if (r && (r->state == FrontierState::ACTIVE ||
+              r->state == FrontierState::DORMANT)) {
+      return;
+    }
+    // Otherwise (record gone or already terminal) fall through and pick a new one.
+  }
+
+  state cur;
+  mighty_ptr_->getState(cur);
+  Eigen::Vector3d robot_pose(cur.pos.x(), cur.pos.y(), cur.yaw);
+
+  auto next = frontier_manager_->selectNextGoal(robot_pose, *occ_grid_2d_);
+  if (!next) {
+    if (exploration_active_) {
+      RCLCPP_INFO(this->get_logger(),
+                  "Exploration: nothing left to explore — halting at current pose");
+      // Replace the previously-issued frontier goal with a "stay here" goal so
+      // MIGHTY converges to a stop instead of continuing to drive toward the
+      // already-consumed last frontier. Without this, the planner keeps
+      // executing the in-flight trajectory all the way to the original point.
+      geometry_msgs::msg::PoseStamped here;
+      here.header.frame_id    = par_.map_frame_id;
+      here.header.stamp       = this->now();
+      here.pose.position.x    = cur.pos.x();
+      here.pose.position.y    = cur.pos.y();
+      here.pose.position.z    = par_.expl_default_goal_z;
+      here.pose.orientation.w = 1.0;
+      terminalGoalCallbackImpl(here, /*from_user=*/false);
+    }
+    exploration_active_ = false;
     return;
+  }
+
+  geometry_msgs::msg::PoseStamped g;
+  g.header.frame_id    = par_.map_frame_id;
+  g.header.stamp       = this->now();
+  g.pose.position.x    = next->centroid_xy.x();
+  g.pose.position.y    = next->centroid_xy.y();
+  g.pose.position.z    = par_.expl_default_goal_z;
+  g.pose.orientation.w = 1.0;
+
+  RCLCPP_INFO(this->get_logger(),
+              "Exploration: -> frontier %lu at (%.2f, %.2f), state=%d, u=%.3f",
+              static_cast<unsigned long>(next->id),
+              next->centroid_xy.x(), next->centroid_xy.y(),
+              static_cast<int>(next->state), next->cached_utility);
+
+  terminalGoalCallbackImpl(g, /*from_user=*/false);
+
+  current_explore_id_       = next->id;
+  exploration_active_       = true;
+  unreachable_consec_count_ = 0;
+  publishExplorationCurrentGoal(*next);
+}
+
+// ----------------------------------------------------------------------------
+
+namespace {
+
+std_msgs::msg::ColorRGBA makeColor(double r, double g, double b, double a) {
+  std_msgs::msg::ColorRGBA c;
+  c.r = static_cast<float>(r);
+  c.g = static_cast<float>(g);
+  c.b = static_cast<float>(b);
+  c.a = static_cast<float>(a);
+  return c;
+}
+
+std_msgs::msg::ColorRGBA colorForState(FrontierState s) {
+  switch (s) {
+    case FrontierState::ACTIVE:      return makeColor(0.0, 0.8, 1.0, 0.9);  // cyan
+    case FrontierState::DORMANT:     return makeColor(0.6, 0.6, 0.6, 0.7);  // gray
+    case FrontierState::VISITED:     return makeColor(0.0, 0.9, 0.0, 0.7);  // green
+    case FrontierState::INVALIDATED: return makeColor(0.9, 0.0, 0.0, 0.7);  // red
+  }
+  return makeColor(1.0, 1.0, 1.0, 0.7);
+}
+
+}  // namespace
+
+/**
+ * @brief Publish frontier visualization markers. We only show ACTIVE and
+ *        DORMANT centroids plus a small `id=N` text label per centroid, plus
+ *        the yellow robot→goal line. VISITED and INVALIDATED frontiers are
+ *        kept in the database (so they still gate selection and DB eviction)
+ *        but suppressed from RViz to keep the scene readable. One MarkerArray
+ *        per cycle, prefixed with DELETEALL so stale markers don't accumulate.
+ */
+void MIGHTY_NODE::publishFrontierMarkers() {
+  if (!pub_frontiers_ || !frontier_manager_ || !occ_grid_2d_) return;
+
+  visualization_msgs::msg::MarkerArray arr;
+
+  // DELETEALL prefix to wipe stale markers from previous cycles.
+  {
+    visualization_msgs::msg::Marker del;
+    del.header.frame_id = par_.map_frame_id;
+    del.header.stamp    = this->now();
+    del.action          = visualization_msgs::msg::Marker::DELETEALL;
+    arr.markers.push_back(del);
+  }
+
+  const auto& records = frontier_manager_->records();
+
+  visualization_msgs::msg::Marker centroids;
+  centroids.header.frame_id = par_.map_frame_id;
+  centroids.header.stamp    = this->now();
+  centroids.ns              = "frontier_centroids";
+  centroids.id              = 0;
+  centroids.type            = visualization_msgs::msg::Marker::SPHERE_LIST;
+  centroids.action          = visualization_msgs::msg::Marker::ADD;
+  centroids.scale.x = 0.3;
+  centroids.scale.y = 0.3;
+  centroids.scale.z = 0.3;
+  centroids.pose.orientation.w = 1.0;
+
+  int label_id = 0;
+  for (const auto& r : records) {
+    // Only ACTIVE and DORMANT are visualized — VISITED/INVALIDATED stay in
+    // the DB but are hidden from RViz.
+    if (r.state != FrontierState::ACTIVE && r.state != FrontierState::DORMANT) {
+      continue;
+    }
+
+    // Centroid sphere, colored by state.
+    geometry_msgs::msg::Point p;
+    p.x = r.centroid_xy.x();
+    p.y = r.centroid_xy.y();
+    p.z = par_.expl_default_goal_z + 0.1;
+    centroids.points.push_back(p);
+    centroids.colors.push_back(colorForState(r.state));
+
+    // Per-record text label — just the id, so you can track a specific
+    // frontier across cycles. (Cluster size and cached utility are dropped.)
+    visualization_msgs::msg::Marker label;
+    label.header.frame_id = par_.map_frame_id;
+    label.header.stamp    = this->now();
+    label.ns              = "frontier_labels";
+    label.id              = label_id++;
+    label.type            = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    label.action          = visualization_msgs::msg::Marker::ADD;
+    label.pose.position.x = r.centroid_xy.x();
+    label.pose.position.y = r.centroid_xy.y();
+    label.pose.position.z = par_.expl_default_goal_z + 0.6;
+    label.pose.orientation.w = 1.0;
+    label.scale.z = 0.4;
+    label.color   = makeColor(0.0, 0.0, 0.0, 1.0);
+    {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "id=%lu",
+                    static_cast<unsigned long>(r.id));
+      label.text = buf;
+    }
+    arr.markers.push_back(label);
+  }
+  if (!centroids.points.empty()) arr.markers.push_back(centroids);
+
+  // Yellow line from robot to current exploration goal.
+  if (exploration_active_ && state_initialized_) {
+    state cur;
+    mighty_ptr_->getState(cur);
+    auto* r = frontier_manager_->find(current_explore_id_);
+    if (r) {
+      visualization_msgs::msg::Marker line;
+      line.header.frame_id = par_.map_frame_id;
+      line.header.stamp    = this->now();
+      line.ns              = "frontier_goal_line";
+      line.id              = 0;
+      line.type            = visualization_msgs::msg::Marker::LINE_STRIP;
+      line.action          = visualization_msgs::msg::Marker::ADD;
+      line.scale.x         = 0.15;
+      line.color           = makeColor(1.0, 1.0, 0.0, 0.9);
+      line.pose.orientation.w = 1.0;
+      geometry_msgs::msg::Point a;
+      a.x = cur.pos.x();
+      a.y = cur.pos.y();
+      a.z = par_.expl_default_goal_z + 0.1;
+      geometry_msgs::msg::Point b;
+      b.x = r->centroid_xy.x();
+      b.y = r->centroid_xy.y();
+      b.z = par_.expl_default_goal_z + 0.1;
+      line.points.push_back(a);
+      line.points.push_back(b);
+      arr.markers.push_back(line);
+    }
+  }
+
+  // Yellow rectangle showing the user-configured exploration bounds, plus a
+  // text label so it's obvious in RViz what the rectangle means.
+  if (par_.expl_bounds_enabled) {
+    const double z = par_.expl_default_goal_z + 0.05;
+    const double x0 = par_.expl_bounds_min_x;
+    const double x1 = par_.expl_bounds_max_x;
+    const double y0 = par_.expl_bounds_min_y;
+    const double y1 = par_.expl_bounds_max_y;
+
+    visualization_msgs::msg::Marker rect;
+    rect.header.frame_id = par_.map_frame_id;
+    rect.header.stamp    = this->now();
+    rect.ns              = "exploration_bounds";
+    rect.id              = 0;
+    rect.type            = visualization_msgs::msg::Marker::LINE_STRIP;
+    rect.action          = visualization_msgs::msg::Marker::ADD;
+    rect.scale.x         = 0.10;            // line thickness
+    rect.color           = makeColor(1.0, 1.0, 0.0, 0.9);  // yellow
+    rect.pose.orientation.w = 1.0;
+    auto pt = [&](double x, double y) {
+      geometry_msgs::msg::Point p; p.x = x; p.y = y; p.z = z; return p;
+    };
+    rect.points.push_back(pt(x0, y0));
+    rect.points.push_back(pt(x1, y0));
+    rect.points.push_back(pt(x1, y1));
+    rect.points.push_back(pt(x0, y1));
+    rect.points.push_back(pt(x0, y0));   // close the loop
+    arr.markers.push_back(rect);
+
+    visualization_msgs::msg::Marker label;
+    label.header.frame_id = par_.map_frame_id;
+    label.header.stamp    = this->now();
+    label.ns              = "exploration_bounds_label";
+    label.id              = 0;
+    label.type            = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    label.action          = visualization_msgs::msg::Marker::ADD;
+    label.pose.position.x = 0.5 * (x0 + x1);
+    label.pose.position.y = y1 + 0.5;     // sit just above the top edge
+    label.pose.position.z = z + 0.5;
+    label.pose.orientation.w = 1.0;
+    label.scale.z = 0.6;
+    label.color   = makeColor(1.0, 1.0, 0.0, 0.9);
+    label.text    = "Exploration Area";
+    arr.markers.push_back(label);
+  }
+
+  pub_frontiers_->publish(arr);
+}
+
+// ----------------------------------------------------------------------------
+
+void MIGHTY_NODE::publishExplorationCurrentGoal(const FrontierRecord& r) {
+  if (!pub_explore_current_goal_) return;
+  geometry_msgs::msg::PoseStamped g;
+  g.header.frame_id    = par_.map_frame_id;
+  g.header.stamp       = this->now();
+  g.pose.position.x    = r.centroid_xy.x();
+  g.pose.position.y    = r.centroid_xy.y();
+  g.pose.position.z    = par_.expl_default_goal_z;
+  g.pose.orientation.w = 1.0;
+  pub_explore_current_goal_->publish(g);
+}
+
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief Publish the persistent occupancy map as a nav_msgs/OccupancyGrid.
+ *        The buffer already holds tristate values (-1 unknown / 0 free /
+ *        100 occupied) matching the message encoding, so this is a flat
+ *        copy. RViz subscribes to /exploration/visited_map and renders it
+ *        behind the sliding occ_2d so revisited cells keep their last-known
+ *        FREE/OCCUPIED color instead of flickering UNKNOWN.
+ */
+void MIGHTY_NODE::publishVisitedMap() {
+  if (!pub_visited_map_ || !visited_map_ || visited_map_->empty()) return;
+
+  nav_msgs::msg::OccupancyGrid msg;
+  msg.header.frame_id = par_.map_frame_id;
+  msg.header.stamp    = this->now();
+  msg.info.resolution = static_cast<float>(visited_map_->resolution());
+  msg.info.width      = static_cast<unsigned>(visited_map_->width());
+  msg.info.height     = static_cast<unsigned>(visited_map_->height());
+  msg.info.origin.position.x    = visited_map_->originX();
+  msg.info.origin.position.y    = visited_map_->originY();
+  msg.info.origin.position.z    = par_.expl_default_goal_z;
+  msg.info.origin.orientation.w = 1.0;
+
+  const auto& v = visited_map_->data();
+  msg.data.assign(v.begin(), v.end());  // raw tristate copy
+  pub_visited_map_->publish(msg);
+}
+
+// ----------------------------------------------------------------------------
+
+void MIGHTY_NODE::publishHeatCloud() {
+  if (!pub_heat_cloud_) return;
 
   auto map_util = mighty_ptr_->getMapUtil();
-  if (!map_util)
-    return;
+  if (!map_util) return;
 
   // Check if any heat source is enabled (terrain cost counts as heat in 2D mode)
-  const bool has_heat = par_.dynamic_heat_enabled || par_.static_heat_enabled || par_.use_2d_planning;
-  if (!par_.use_heat_map || !has_heat)
-    return;
+  const bool has_heat =
+      par_.dynamic_heat_enabled || par_.static_heat_enabled || par_.use_2d_planning;
+  if (!par_.use_heat_map || !has_heat) return;
 
   // -------- Tunables --------
-  const int stride = 1;             // 1 = every voxel, 2 = every 2 voxels, etc.
-  const float heat_min = 0.001f;    // only publish voxels with heat >= this
-  const size_t max_points = 200000; // hard cap for safety
+  const int stride = 1;              // 1 = every voxel, 2 = every 2 voxels, etc.
+  const float heat_min = 0.001f;     // only publish voxels with heat >= this
+  const size_t max_points = 200000;  // hard cap for safety
   // --------------------------
 
-  const auto dim = map_util->getDim(); // Veci<3>
+  const auto dim = map_util->getDim();  // Veci<3>
   const int nx = dim(0);
   const int ny = dim(1);
   const int nz = dim(2);
@@ -2639,22 +3349,17 @@ void MIGHTY_NODE::publishHeatCloud()
   pts.reserve(50000);
   intens.reserve(50000);
 
-  for (int x = 0; x < nx; x += stride)
-  {
-    for (int y = 0; y < ny; y += stride)
-    {
-      for (int z = 0; z < nz; z += stride)
-      {
+  for (int x = 0; x < nx; x += stride) {
+    for (int y = 0; y < ny; y += stride) {
+      for (int z = 0; z < nz; z += stride) {
         const float h = map_util->getHeat(x, y, z);
-        if (h < heat_min)
-          continue;
+        if (h < heat_min) continue;
 
         const Vec3f p = map_util->intToFloat(Veci<3>(x, y, z));
         pts.push_back(p);
         intens.push_back(h);
 
-        if (pts.size() >= max_points)
-          goto BUILD_MSG;
+        if (pts.size() >= max_points) goto BUILD_MSG;
       }
     }
   }
@@ -2662,14 +3367,11 @@ void MIGHTY_NODE::publishHeatCloud()
 BUILD_MSG:
   // Normalize intensities to [0, 1] so the color gradient is visible in RViz
   float max_intensity = 0.0f;
-  for (const float v : intens)
-    max_intensity = std::max(max_intensity, v);
+  for (const float v : intens) max_intensity = std::max(max_intensity, v);
 
-  if (max_intensity > 0.0f)
-  {
+  if (max_intensity > 0.0f) {
     const float inv_max = 1.0f / max_intensity;
-    for (float &v : intens)
-      v *= inv_max;
+    for (float& v : intens) v *= inv_max;
   }
 
   sensor_msgs::msg::PointCloud2 msg;
@@ -2677,12 +3379,10 @@ BUILD_MSG:
   msg.header.stamp = this->now();
 
   sensor_msgs::PointCloud2Modifier modifier(msg);
-  modifier.setPointCloud2Fields(
-      4,
-      "x", 1, sensor_msgs::msg::PointField::FLOAT32,
-      "y", 1, sensor_msgs::msg::PointField::FLOAT32,
-      "z", 1, sensor_msgs::msg::PointField::FLOAT32,
-      "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+  modifier.setPointCloud2Fields(4, "x", 1, sensor_msgs::msg::PointField::FLOAT32, "y", 1,
+                                sensor_msgs::msg::PointField::FLOAT32, "z", 1,
+                                sensor_msgs::msg::PointField::FLOAT32, "intensity", 1,
+                                sensor_msgs::msg::PointField::FLOAT32);
   modifier.resize(pts.size());
 
   sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
@@ -2690,9 +3390,8 @@ BUILD_MSG:
   sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
   sensor_msgs::PointCloud2Iterator<float> iter_i(msg, "intensity");
 
-  for (size_t k = 0; k < pts.size(); ++k, ++iter_x, ++iter_y, ++iter_z, ++iter_i)
-  {
-    const auto &p = pts[k];
+  for (size_t k = 0; k < pts.size(); ++k, ++iter_x, ++iter_y, ++iter_z, ++iter_i) {
+    const auto& p = pts[k];
     *iter_x = static_cast<float>(p(0));
     *iter_y = static_cast<float>(p(1));
     *iter_z = static_cast<float>(p(2));
@@ -2704,10 +3403,8 @@ BUILD_MSG:
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::publishGround2DOccupied()
-{
-  if (!pub_ground_2d_occ_)
-    return;
+void MIGHTY_NODE::publishGround2DOccupied() {
+  if (!pub_ground_2d_occ_) return;
 
   auto map_util = mighty_ptr_->getMapUtil();
   if (!map_util) {
@@ -2750,31 +3447,30 @@ void MIGHTY_NODE::publishGround2DOccupied()
 
 // ----------------------------------------------------------------------------
 
-void MIGHTY_NODE::publishGround2DHeat()
-{
-  if (!pub_ground_2d_heat_ || !par_.use_2d_planning)
-    return;
+void MIGHTY_NODE::publishGround2DHeat() {
+  if (!pub_ground_2d_heat_ || !par_.use_2d_planning) return;
 
   auto map_util = mighty_ptr_->getMapUtil();
-  if (!map_util || !map_util->has2DMap())
-    return;
+  if (!map_util || !map_util->has2DMap()) return;
 
   int dimX, dimY;
   map_util->get2DDimensions(dimX, dimY);
   const auto origin = map_util->getOrigin();
   const float res = static_cast<float>(map_util->getRes());
 
-  // Collect 2D terrain cost as colored point cloud
+  // Collect 2D heat (dynamic + static + terrain) as colored point cloud
   pcl::PointCloud<pcl::PointXYZI> cloud;
   for (int x = 0; x < dimX; ++x) {
     for (int y = 0; y < dimY; ++y) {
+      const float h = map_util->getHeat2D(x, y);
       const float tc = map_util->getTerrainCost(x, y);
-      if (tc > 0.001f) {
+      const float total = std::max(h, tc);
+      if (total > 0.001f) {
         pcl::PointXYZI pt;
         pt.x = origin(0) + (x + 0.5f) * res;
         pt.y = origin(1) + (y + 0.5f) * res;
-        pt.z = map_util->getTerrainHeight(x, y);
-        pt.intensity = tc;
+        pt.z = 0.05f;  // slightly above ground for visibility
+        pt.intensity = total;
         cloud.push_back(pt);
       }
     }
@@ -2787,11 +3483,11 @@ void MIGHTY_NODE::publishGround2DHeat()
   pub_ground_2d_heat_->publish(msg);
 }
 
+}  // namespace mighty
+
 // ----------------------------------------------------------------------------
 
-int main(int argc, char **argv)
-{
-
+int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
   // Initialize multi-threaded executor

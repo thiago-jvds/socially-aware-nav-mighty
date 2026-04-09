@@ -2,7 +2,7 @@
 
 If you like this project, please consider starring ⭐ the repo!
 
-**Submitted to the IEEE Robotics and Automation Letters (RA-L)**
+**Accepted to the IEEE Robotics and Automation Letters (RA-L)**
 
 | **Trajectory** | **Forest** |
 | ------------------------- | ------------------------- |
@@ -25,14 +25,16 @@ If you like this project, please consider starring ⭐ the repo!
 MIGHTY: Hermite Spline-based Efficient Trajectory Planning is available at [https://arxiv.org/abs/2511.10822](https://arxiv.org/abs/2511.10822)!
 
 ```bibtex
-@article{kondo2025mighty,
-      title={MIGHTY: Hermite Spline-based Efficient Trajectory Planning},
-      author={Kota Kondo and Yuwei Wu and Vijay Kumar and Jonathan P. How},
-      year={2025},
-      eprint={2511.10822},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO},
-      url={https://arxiv.org/abs/2511.10822},
+@ARTICLE{kondo2026mighty,
+  author={Kondo, Kota and Wu, Yuwei and Kumar, Vijay and How, Jonathan P.},
+  journal={IEEE Robotics and Automation Letters}, 
+  title={MIGHTY: Hermite Spline-based Efficient Trajectory Planning}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={1-8},
+  keywords={Anisotropic;Central Processing Unit;Filters;Radio access networks;Regional area networks;Location awareness;Mobile communication;Communication systems;High frequency;Indoor environment;Aerial Systems: Perception and Autonomy;Motion and Path Planning;Trajectory Optimization;Hermite Splines;Unmanned Aerial Vehicles},
+  doi={10.1109/LRA.2026.3681187}
 }
 ```
 
@@ -83,11 +85,8 @@ make build-no-cache
 **4. Run Simulations**
 
 ```bash
-# Multi-agent simulation (default: 10 agents)
-make run
-
-# Multi-agent with custom number of agents
-make run-multiagent NUM_AGENTS=5
+# Single-agent interactive simulation (click goals in RViz2 with "2D Goal Pose")
+make run-interactive
 
 # Single-agent Gazebo simulation
 make run-gazebo
@@ -102,6 +101,11 @@ make run-gazebo ENV=easy_forest
 make shell
 ```
 
+In `run-interactive` mode, send goals from the RViz2 toolbar:
+1. Click **"2D Goal Pose"**
+2. Click and drag on the map to set the goal position and orientation
+3. The agent will plan and navigate to the goal
+
 <details>
   <summary><b>Docker Make Targets Reference</b></summary>
 
@@ -109,9 +113,10 @@ make shell
   |--------|-------------|---------|
   | `make build` | Build the Docker image | - |
   | `make build-no-cache` | Build without cache (forces fresh build) | - |
-  | `make run` | Run multiagent simulation (default: 10 agents) | - |
-  | `make run-multiagent` | Run multiagent with custom agent count | `NUM_AGENTS=N` (default: 10) |
+  | `make run-interactive` | Run single agent with manual goal (RViz2 2D Goal Pose) | - |
   | `make run-gazebo` | Run single-agent Gazebo simulation | `GOAL_X`, `GOAL_Y`, `GOAL_Z` (default: 305, 0, 3), `ENV` (default: hard_forest) |
+  | `make run-mac-interactive` | Run single agent on Mac with manual goal (Xpra, browser at localhost:8080) | - |
+  | `make run-mac-gazebo` | Run Gazebo on Mac (Xpra) | `GOAL_X`, `GOAL_Y`, `GOAL_Z`, `ENV` |
   | `make shell` | Open interactive shell for debugging | - |
 
 </details>
@@ -138,6 +143,82 @@ make shell
 
 ---
 
+### Running on Mac (Apple Silicon / Intel)
+
+MIGHTY runs on macOS via Docker with [Xpra](https://xpra.org/) for browser-based visualization. Xpra is installed inside the Docker image automatically — you do **not** need to install Xpra, X11, or XQuartz on your Mac.
+
+#### Prerequisites
+
+**1. Install Docker Desktop**
+
+Download and install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/).
+
+**2. Configure Docker Desktop**
+
+Open Docker Desktop and go to **Settings** (gear icon). Two settings must be changed:
+
+- **General** > Under "Virtual Machine Options", enable **"Use Rosetta for x86_64/amd64 emulation on Apple Silicon"** (Apple Silicon Macs only — significantly speeds up the amd64 build and runtime)
+- **Resources** > Set **Memory** to at least **24 GB** (32 GB recommended). The default 4 GB is not enough and will cause out-of-memory failures during the build.
+
+#### Building
+
+```bash
+git clone https://github.com/mit-acl/mighty.git
+cd mighty/docker
+make build
+```
+
+> The first build takes a while since it cross-compiles for amd64. Subsequent builds use Docker layer caching and are much faster. Use `make build-no-cache` to force a fresh build.
+
+#### Running Simulations
+
+All `run-mac*` targets use Xpra to stream GUI windows (RViz2, etc.) to your browser.
+
+```bash
+cd mighty/docker
+
+# Single agent with manual goal control (use RViz2's "2D Goal Pose" tool)
+make run-mac-interactive
+
+# Single-agent Gazebo simulation
+make run-mac-gazebo
+```
+
+#### Visualization
+
+After running any `run-mac*` command, open your browser and go to:
+
+**http://localhost:8080**
+
+RViz2 and other GUI windows will appear in the browser. You can interact with them just like native windows — pan, zoom, and use the RViz2 toolbar.
+
+To send a goal manually (in `run-mac-interactive` mode):
+1. In the RViz2 toolbar, click **"2D Goal Pose"**
+2. Click and drag on the map to set the goal position and orientation
+3. The agent will plan and navigate to the goal
+
+<details>
+  <summary><b>Mac Make Targets Reference</b></summary>
+
+  | Target | Description | Options |
+  |--------|-------------|---------|
+  | `make run-mac-interactive` | Single agent with manual 2D Goal Pose | - |
+  | `make run-mac-gazebo` | Single-agent Gazebo simulation | `GOAL_X`, `GOAL_Y`, `GOAL_Z`, `ENV` |
+
+</details>
+
+<details>
+  <summary><b>Troubleshooting</b></summary>
+
+  - **Build fails with out-of-memory error**: Increase Docker Desktop memory allocation (Settings > Resources > Memory). 24 GB minimum, 32 GB recommended.
+  - **Build is very slow**: Make sure Rosetta emulation is enabled in Docker Desktop settings (General > Virtual Machine Options).
+  - **Browser shows nothing at localhost:8080**: Wait 10-20 seconds after launching — Xpra takes a moment to start. Check the terminal for `[Docker] Xpra server running on port 8080`.
+  - **Port 8080 already in use**: Another service is using port 8080. Stop it first, or modify the `-p 8080:8080` in the Makefile to use a different port (e.g., `-p 9090:8080`).
+
+</details>
+
+---
+
 ### Native Installation
 
 **1. Clone the Repository**
@@ -156,12 +237,12 @@ cd mighty_ws/src/mighty
 ```
 
 This automated script will:
-- ✅ Install ROS 2 Humble (if not already installed)
-- ✅ Install all system dependencies
-- ✅ Import all repositories from `mighty.repos` at tested commits
-- ✅ Build DecompROS2, Livox-SDK2, and livox_ros_driver2
-- ✅ Build MIGHTY and all ROS dependencies
-- ✅ Configure your `~/.bashrc` for future use
+- Install ROS 2 Humble (if not already installed)
+- Install all system dependencies
+- Import all repositories from `mighty.repos` at tested commits
+- Build DecompROS2, Livox-SDK2, and livox_ros_driver2
+- Build MIGHTY and all ROS dependencies
+- Configure your `~/.bashrc` for future use
 
 **Notes:**
 - You'll be prompted for sudo password once at the start
@@ -175,11 +256,8 @@ Use the unified simulation launcher script `run_sim.py`:
 ```bash
 cd ~/code/mighty_ws
 
-# Multi-agent simulation (default: 10 agents)
-python3 src/mighty/scripts/run_sim.py --mode multiagent --setup-bash ~/code/mighty_ws/install/setup.bash
-
-# Multi-agent with custom number of agents
-python3 src/mighty/scripts/run_sim.py --mode multiagent -s ~/code/mighty_ws/install/setup.bash --num-agents 5
+# Single-agent interactive simulation (click goals in RViz2 with "2D Goal Pose")
+python3 src/mighty/scripts/run_sim.py --mode interactive --setup-bash ~/code/mighty_ws/install/setup.bash
 
 # Single-agent Gazebo simulation
 python3 src/mighty/scripts/run_sim.py --mode gazebo -s ~/code/mighty_ws/install/setup.bash
@@ -198,13 +276,11 @@ python3 src/mighty/scripts/run_sim.py --mode gazebo -s ~/code/mighty_ws/install/
   <summary><b>All Simulation Options</b></summary>
 
   ```
-  --mode, -m          Required. 'multiagent' or 'gazebo'
+  --mode, -m          Required. 'interactive' or 'gazebo'
   --setup-bash, -s    Required. Path to setup.bash
   --goal, -g          Goal position X Y Z for gazebo mode (default: 305 0 3)
   --start, -p         Start position X Y Z for gazebo mode (default: 0 0 3)
   --start-yaw         Start yaw in radians (default: 1.57)
-  --num-agents, -n    Number of agents for multiagent mode (default: 10)
-  --radius, -r        Circle radius for multiagent formation (default: 10)
   --env, -e           Gazebo environment (default: hard_forest)
   --ros-domain-id     ROS_DOMAIN_ID (default: 20)
   --no-rviz           Disable RViz
@@ -212,6 +288,12 @@ python3 src/mighty/scripts/run_sim.py --mode gazebo -s ~/code/mighty_ws/install/
   --dry-run           Print generated YAML without launching
   ```
 </details>
+
+---
+
+## Acknowledgments
+
+The L-BFGS solver implementation in this repository (`src/mighty/lbfgs_solver.cpp`, `include/mighty/lbfgs_solver.hpp`) is adapted from [ZJU-FAST-Lab/GCOPTER](https://github.com/ZJU-FAST-Lab/GCOPTER/blob/main/gcopter/include/gcopter/lbfgs.hpp). We thank the authors for making their implementation publicly available.
 
 ---
 

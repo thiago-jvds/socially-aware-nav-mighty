@@ -26,8 +26,10 @@
 #include <hgp/utils.hpp>
 
 // Other includes
-#include <Eigen/Dense>
 #include <mutex>
+
+#include <Eigen/Dense>
+
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
 #include "timer.hpp"
@@ -38,8 +40,16 @@ using std::placeholders::_1;
 using std::placeholders::_2;
 using std::placeholders::_3;
 
+/** @brief Manages the voxel map, global planner, and convex decomposition for HGP.
+ *
+ *  HGPManager owns the VoxelMapUtil (occupancy grid) and the HGPPlanner
+ *  (graph-search-based global path planner). It provides thread-safe access
+ *  to map queries, obstacle inflation, and safe-flight-corridor computation
+ *  via ellipsoid decomposition.
+ */
 class HGPManager {
  public:
+  /** @brief Default constructor. */
   HGPManager();
 
   /** @brief Configure the manager with planner parameters.
@@ -208,7 +218,8 @@ class HGPManager {
   void setDynamicPredictedSamples(const std::vector<vec_Vecf<3>>& pred_samples,
                                   const std::vector<float>& pred_times);
 
-  /** @brief Inflate dynamic obstacles and unknown boundary voxels into a point set for decomposition.
+  /** @brief Inflate dynamic obstacles and unknown boundary voxels into a point set for
+   * decomposition.
    *  @param pts Input/output point set; inflated points are appended.
    *  @param obst_pos Dynamic obstacle positions.
    *  @param obst_bbox Dynamic obstacle bounding box half-extents.
@@ -287,7 +298,8 @@ class HGPManager {
    */
   void updateVecUnknownOccupied(const vec_Vec3f& vec_uo);
 
-  /** @brief Append the occupied point vector into the unknown+occupied point vector (thread-safe). */
+  /** @brief Append the occupied point vector into the unknown+occupied point vector (thread-safe).
+   */
   void insertVecOccupiedToVecUnknownOccupied();
 
   /** @brief Get a thread-safe shared pointer to the underlying voxel map utility.
@@ -295,7 +307,12 @@ class HGPManager {
    */
   std::shared_ptr<mighty::VoxelMapUtil> getMapUtilSharedPtr();
 
-  // Helper: construct Veci<3> from 3 ints.
+  /** @brief Construct a Veci<3> from three integer coordinates.
+   *  @param x X coordinate.
+   *  @param y Y coordinate.
+   *  @param z Z coordinate.
+   *  @return Veci<3> containing (x, y, z).
+   */
   static inline Veci<3> idxs_to_veci3(int x, int y, int z) {
     Veci<3> v;
     v << x, y, z;
@@ -337,9 +354,32 @@ class HGPManager {
   bool map_initialized_ = false;
   bool is_ground_robot_ = false;
 
+  // ESDF for ground robot A* cost
+  std::shared_ptr<const EsdfGrid2D> esdf_grid_;
+  double esdf_weight_astar_ = 0.0;
+  double esdf_d_safe_astar_ = 0.0;
+
+  // Binary 2D occupancy for ground robot A* planning
+  std::shared_ptr<const class OccGrid2D> occ_grid_2d_;
+
  public:
   /** @brief Check if 2D ground robot planning mode is active. */
   bool isGroundRobot() const { return is_ground_robot_; }
+
+  /** @brief Set binary 2D occupancy grid for ground robot A* planning. */
+  void setOccGrid2D(std::shared_ptr<const class OccGrid2D> grid) { occ_grid_2d_ = grid; }
+
+  /** @brief Set max distance between waypoints for 2D path resampling. */
+  void setMaxDistVertexes2D(double d) {
+    if (planner_ptr_) planner_ptr_->setMaxDistVertexes2D(d);
+  }
+
+  /** @brief Set ESDF grid for distance-based A* cost (ground robot only). */
+  void setEsdfGrid(std::shared_ptr<const EsdfGrid2D> grid, double weight, double d_safe) {
+    esdf_grid_ = grid;
+    esdf_weight_astar_ = weight;
+    esdf_d_safe_astar_ = d_safe;
+  }
 
   /** @brief Get terrain height at world coordinates (delegates to map_util).
    *  Thread-safe: uses planning map if available.

@@ -10,7 +10,7 @@
 
 """
 Publishes a ground-truth TransformStamped at 10 Hz on
-  /lidar_registration/frame_align/{ego_name}/{other_name}
+  /frame_align/{ego_name}/{other_name}
 
 Parameters:
   ego_name   (str)   – e.g. "RR01"
@@ -52,7 +52,7 @@ class FrameAlignPublisher(Node):
         self.qw = float(self.get_parameter('qw').value)
 
         # Build the topic name
-        topic = f'/lidar_registration/frame_align/{ego}/{other}'
+        topic = f'/frame_align/{ego}/{other}'
         self.get_logger().info(f'Publishing frame alignment on {topic}')
 
         # Build the static parts of the message

@@ -11,15 +11,16 @@
 // This file is a mofified version of
 // https://github.com/sikang/motion_primitive_library/blob/master/test/read_map.hpp
 
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <yaml-cpp/yaml.h>
-
 #include <fstream>
 #include <iostream>
 #include <memory>
 
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
 #include "hgp/data_utils.hpp"
+
+#include <yaml-cpp/yaml.h>
 
 /** @brief Reads a point cloud into a voxelized occupancy grid with obstacle inflation.
  *

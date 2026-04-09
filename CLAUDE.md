@@ -4,101 +4,91 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MIGHTY (Hermite Spline-based Efficient Trajectory Planning) is a ROS 2 package for autonomous robot trajectory planning. It supports UAVs and ground robots (Pioneer 3-AT) in both simulation and hardware. Developed at MIT ACL by Kota Kondo.
+MIGHTY (Hermite Spline-based Efficient Trajectory Planning) is a ROS 2 (Humble) C++ package for real-time UAV trajectory planning with obstacle avoidance. It supports multi-agent simulations, Gazebo-based single-agent simulations, and hardware deployment.
 
 ## Build Commands
 
+The project uses `ament_cmake` (colcon) as its build system. The workspace root is `~/code/mighty_ws`.
+
 ```bash
-# Build the workspace (from mighty_ws root)
+# Build the entire workspace (from mighty_ws root)
 cd ~/code/mighty_ws
-colcon build
+source /opt/ros/humble/setup.bash
+source ~/code/decomp_ws/install/setup.bash
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Build only the mighty package
-colcon build --packages-select mighty
+colcon build --packages-select mighty --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Source after building
 source install/setup.bash
 ```
 
-The build system is **ament_cmake** (ROS 2 Humble on Ubuntu 22.04). CMake flags include `-Wall -Wextra -Wpedantic` with OpenMP enabled.
+Initial setup (installs all dependencies, clones repos, builds everything):
+```bash
+./setup.sh        # uses all CPUs
+./setup.sh -j 4   # limit parallel jobs
+```
 
 ## Running Simulations
 
-All simulation modes use `scripts/run_sim.py` which generates tmuxp YAML configs:
-
 ```bash
-cd ~/code/mighty_ws
+# Multi-agent simulation (default 10 agents)
+python3 src/mighty/scripts/run_sim.py --mode multiagent -s ~/code/mighty_ws/install/setup.bash
 
-# Multi-agent simulation (10 agents, fake sensing)
-python3 src/mighty/scripts/run_sim.py --mode multiagent
+# Single-agent Gazebo simulation
+python3 src/mighty/scripts/run_sim.py --mode gazebo -s ~/code/mighty_ws/install/setup.bash
 
-# Single-agent Gazebo UAV simulation
-python3 src/mighty/scripts/run_sim.py --mode gazebo
-
-# Ground robot (Pioneer 3-AT) Gazebo simulation
-python3 src/mighty/scripts/run_sim.py --mode gazebo --ground-robot
-
-# Custom goal, environment, agent count
-python3 src/mighty/scripts/run_sim.py --mode gazebo --env easy_forest --goal 100 50 3
-python3 src/mighty/scripts/run_sim.py --mode multiagent --num-agents 5
-
-# Preview generated YAML without launching
-python3 src/mighty/scripts/run_sim.py --mode gazebo --dry-run
+# Docker alternative (from docker/ directory)
+make run           # multiagent
+make run-gazebo    # gazebo
+make shell         # interactive debug shell
 ```
-
-Docker alternative (from `docker/` directory): `make run`, `make run-gazebo`, `make run-multiagent NUM_AGENTS=5`.
-
-## Testing
-
-```bash
-# L-BFGS solver unit tests
-ros2 run mighty test_lbfgs_solver
-```
-
-Jupyter notebooks in `scripts/` contain optimization tests (`test_unconstrained_opt.ipynb`, etc.).
 
 ## Architecture
 
-### Core Pipeline
+### Core Planning Pipeline (`src/mighty/`, `include/mighty/`)
 
-1. **MightyNode** (`src/mighty/mighty_node.cpp`, `include/mighty/mighty_node.hpp`) — Main ROS 2 node. Manages subscriptions (point clouds, odometry, Vicon, inter-agent trajectories), replanning timer callbacks, and trajectory publishing. Orchestrates all other components.
+- **`mighty_node.hpp/cpp`** — ROS 2 node: subscribes to state, point clouds, goal, and dynamic trajectories; publishes planned trajectories and visualization markers.
+- **`mighty.hpp/cpp`** — Core planner class: Hermite spline trajectory generation, obstacle constraint formulation, corridor-based planning.
+- **`lbfgs_solver.hpp/cpp`** — L-BFGS optimization solver for trajectory refinement. `lbfgs_solver_utils` provides helper functions.
+- **`mighty_type.hpp`** — Central type definitions and parameter struct (`parameters`) used throughout.
+- **`initial_guess.hpp`** — Initial trajectory guess generation.
+- **`utils.hpp/cpp`** — Shared utilities (coordinate transforms, geometry helpers).
 
-2. **Mighty** (`src/mighty/mighty.cpp`, `include/mighty/mighty.hpp`) — Core planning algorithm. Implements Hermite spline-based trajectory generation with state machine: YAWING → TRAVELING → GOAL_SEEN → GOAL_REACHED.
+### Dynamic Graph Planner (`src/dgp/`, `include/dgp/`)
 
-3. **L-BFGS Solver** (`src/mighty/lbfgs_solver.cpp`) — Local trajectory optimizer. Optimizes Hermite polynomial splines subject to constraints (velocity, acceleration, jerk, bodyrate, tilt, thrust) and costs (obstacle avoidance, smoothness, time).
+- **`dgp_manager.hpp/cpp`** — Manages the occupancy map (voxel grid), convex decomposition, and interfaces with the planner. Handles both static and dynamic obstacles.
+- **`dgp_planner.hpp/cpp`** — Graph-based global path planner over the voxel grid.
+- **`graph_search.hpp/cpp`** — A* graph search implementation.
+- **`map_util.hpp`** / **`read_map.hpp`** — Voxel map data structure and I/O.
 
-4. **DGP (Discrete Global Planner):**
-   - **DGPManager** (`src/dgp/dgp_manager.cpp`) — Manages occupancy maps, obstacle inflation, and convex decomposition. Interfaces between sensor data and planning.
-   - **DGPPlanner** (`src/dgp/dgp_planner.cpp`) — Abstract planner base supporting JPS (Jump Point Search) and A* with heat maps.
-   - **GraphSearch** (`src/dgp/graph_search.cpp`) — Core graph search with collision checking and path post-processing.
+### Simulation & Utilities (`src/sim/`, `src/mighty/`)
 
-### Supporting Nodes
-
-- **FakeSim** (`src/mighty/fake_sim.cpp`) — Lightweight multi-agent simulator that distributes simulated sensor data without Gazebo.
-- **ObstacleTrackerNode** (`src/mighty/obstacle_tracker_node.cpp`) — Extracts dynamic obstacles from point clouds using PCL.
-- **PurePursuit** (`src/mighty/pure_pursuit.cpp`) — Path-following controller for ground robots.
-- **Coordinate converters** — `convert_odom_to_state`, `convert_vicon_to_state`, `convert_velodyne_to_ros_time`.
-
-### Configuration
-
-- `config/mighty.yaml` — Primary config (~150 parameters): planner bounds, dynamics constraints, cost weights, safety thresholds, visualization levels.
-- `config/mighty_ground_robot.yaml` — Ground robot (Pioneer 3-AT) overrides.
-- `config/hw_mighty.yaml` / `hw_mighty_rover.yaml` — Hardware-specific configs.
-- `include/mighty/mighty_type.hpp` — Parameter struct definition (all configurable parameters declared here).
-
-### Launch System
-
-- `launch/base_mighty.launch.py` — Starts Gazebo world + optional RViz.
-- `launch/onboard_mighty.launch.py` — Main node launcher. Handles UAV/ground robot modes, sensor configs (RealSense, Livox), localization (DLIO vs Vicon), frame alignment for multi-agent.
-- `launch/simulator.launch.py` — FakeSim setup for multi-agent mode.
+- **`fake_sim.cpp`** — Lightweight simulation node (no Gazebo) that integrates planned trajectories.
+- **`obstacle_tracker_node.cpp`** — Tracks dynamic obstacles from sensor data.
+- **`pure_pursuit.cpp`** — Ground robot controller.
+- **`move_model.cpp`** — Gazebo plugin for moving dynamic obstacles.
+- **`convert_odom_to_state.cpp`** / **`convert_vicon_to_state.cpp`** — Sensor-to-state converters for hardware.
 
 ### Key Dependencies
 
-- **Eigen3** — Linear algebra throughout the planner.
-- **PCL** — Point cloud processing for obstacle detection.
-- **DecompROS2** — Convex decomposition for safe flight corridors.
-- **dynus_interfaces** — Custom ROS 2 message types for trajectories and dynamics.
-- **acl-mapping** (`global_mapper_ros`) — 3D occupancy mapping.
-- **uav_simulator** — Quadrotor physics simulation in Gazebo.
+- **Eigen3** — Linear algebra (matrices, vectors throughout)
+- **PCL** — Point cloud processing for obstacle detection
+- **DecompROS2** (`decomp_util`) — Convex decomposition for safe flight corridors (built in separate `decomp_ws`)
+- **dynus_interfaces** — Custom ROS 2 message types (State, Goal, Trajectory, DynTraj, etc.)
+- **OpenMP** — Parallel computation in the planner
 
-All external dependencies are version-pinned in `mighty.repos` and installed via `setup.sh`.
+### Configuration
+
+- `config/mighty.yaml` — Main planner parameters (simulation)
+- `config/hw_mighty.yaml` — Hardware deployment parameters
+- `config/mighty_ground_robot.yaml` — Ground robot parameters
+- Launch files in `launch/` orchestrate multi-node setups
+
+### Data Flow
+
+1. `mighty_node` receives state (odometry), point cloud, and goal
+2. `dgp_manager` updates the voxel map and computes convex free-space corridors
+3. `mighty` generates a Hermite spline trajectory within corridors using L-BFGS optimization
+4. Trajectory is published for the controller (or `fake_sim` in simulation)

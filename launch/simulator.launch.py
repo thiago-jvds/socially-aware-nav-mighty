@@ -1,15 +1,20 @@
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.actions import ComposableNodeContainer
 import launch_ros.actions
 import launch_ros.descriptions
 from ament_index_python.packages import get_package_share_directory
-from launch.conditions import IfCondition, UnlessCondition, LaunchConfigurationEquals, LaunchConfigurationNotEquals
-# from launch.substitutions import EqualsSubstitution, NotEqualsSubstitution
-from launch.substitutions import PythonExpression
+from launch.conditions import UnlessCondition
 
 def generate_launch_description():
 
@@ -39,12 +44,13 @@ def generate_launch_description():
     min_dist_arg = DeclareLaunchArgument('min_dist', default_value=min_dist, description='Minimum distance')
     odometry_topic_arg = DeclareLaunchArgument('odometry_topic', default_value=odometry_topic, description='Odometry topic')
     
-    # 地图属性以及是否使用动力学仿真
-    use_mockamap = LaunchConfiguration('use_mockamap', default=False) # map_generator or mockamap 
+    use_mockamap = LaunchConfiguration('use_mockamap', default=False) # map_generator or mockamap
     use_mockamap_arg = DeclareLaunchArgument('use_mockamap', default_value=use_mockamap, description='Choose map type, map_generator or mockamap')
     use_dynamic = LaunchConfiguration('use_dynamic', default=True)  
     use_dynamic_arg = DeclareLaunchArgument('use_dynamic', default_value=use_dynamic, description='Use Drone Simulation Considering Dynamics or Not')
-    rviz_config_path = os.path.join(get_package_share_directory('mighty'), 'rviz', 'mighty.rviz')
+    default_rviz_config = os.path.join(get_package_share_directory('mighty'), 'rviz', 'mighty.rviz')
+    rviz_config = LaunchConfiguration('rviz_config', default=default_rviz_config)
+    rviz_config_arg = DeclareLaunchArgument('rviz_config', default_value=default_rviz_config, description='Path to RViz config file')
 
     # Node Definitions
     random_forest_node = Node(
@@ -79,33 +85,9 @@ def generate_launch_description():
         condition = UnlessCondition(use_mockamap)
     )
 
-    # mockamap_node = Node(
-    #     package='mockamap',
-    #     executable='mockamap_node',
-    #     name='mockamap_node',
-    #     output='screen',
-    #     remappings=[
-    #         ('/mock_map', '/map_generator/global_cloud')
-    #     ],
-    #     parameters=[
-    #         {'seed': 127},
-    #         {'update_freq': 0.5},
-    #         {'resolution': 0.1},
-    #         {'x_length': PythonExpression(['int(', map_size_x_, ')'])},
-    #         {'y_length': PythonExpression(['int(', map_size_y_, ')'])},
-    #         {'z_length': PythonExpression(['int(', map_size_z_, ')'])},
-    #         {'type': 1},
-    #         {'complexity': 0.05},
-    #         {'fill': 0.12},
-    #         {'fractal': 1},
-    #         {'attenuation': 0.1}
-    #     ],
-    #     condition = IfCondition(use_mockamap)
-    # )
-
     rviz_node = launch_ros.actions.Node(
             package='rviz2', executable='rviz2', output='screen',
-            arguments=['--display-config', rviz_config_path])
+            arguments=['--display-config', rviz_config])
 
     # Create LaunchDescription
     ld = LaunchDescription()
@@ -124,9 +106,9 @@ def generate_launch_description():
     ld.add_action(odometry_topic_arg)
     ld.add_action(use_mockamap_arg)
     ld.add_action(use_dynamic_arg)
+    ld.add_action(rviz_config_arg)
 
     ld.add_action(random_forest_node)
-    # ld.add_action(mockamap_node)
     ld.add_action(rviz_node)
 
     return ld

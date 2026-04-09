@@ -1,146 +1,159 @@
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 import os
 import subprocess
 import argparse
+import datetime
 
-def record_ros2_bag(bag_name, bag_path, agents, topics=None):
-    
-    # Define the topics template that is common across all agents
-    base_topics = [
-        # "/agent_initial_guess_pos",
-        # "/agent_pos",
-        # "/agent_pos_array",
-        # "/camera_info",
-        # "/depth_camera/free_cells_vis_array",
-        # "/depth_camera/occupied_cells_vis_array",
-        # "/drone_marker",
-        # "/drone_marker_array",
-        # "/dummy_traj_pos",
-        # "/goal",
-        # "/image_raw",
-        # "/joint_states",
-        # "/dgp_path_marker",
-        # "/original_dgp_path_marker",
-        # "/free_dgp_path_marker",
-        # "/lidar/free_cells_vis_array",
-        # "/lidar/occupied_cells_vis_array",
-        # "/mode",
-        # "/own_traj",
-        "/point_G",
-        "/point_A",
-        "/point_E",
-        # "/point_G_term",
-        # "/poly_whole",
-        # "/poly_safe",
-        # "/projected_map",
-        # "/robot_description",
-        # "/state",
-        # "/term_goal",
-        "/traj",
-        "/traj_committed_colored",
-        # "/mid360_PointCloud2",
-        # "/d435/color/image_raw",
-        # "/d435/color/image_raw/compressed",
-        # "/d435/depth/color/points",
-        # "/d435/depth/image_raw",
-        # "/d435/depth/image_raw/compressed",
-        # "/d435/depth/image_raw/compressedDepth",
-        # "/d435/color/camera_info",
-        # "/d435/depth/camera_info",
-        # "/dynamic_map_marker",
-        # "/free_map_marker",
-        # "/actual_traj",
-        # "/tracked_obstacles",
-        # "/cluster_bounding_boxes",
-        # "/yaw_output",
-        # "/predicted_trajs",
-        # "/pn_adaptation",
-        # "/fov",
-        # "/yolo/image_yolo",
-        # "/frontiers",
-        # "/uncertainty_spheres",
-        # "/point_current_state",
-        # "/cp",
-        # "/static_push_points",
-        # "/local_global_path_mazrker",
-        # "/local_global_path_after_push_marker",
-        # "/vel_text",
-        # "/livox/lidar",
-        # "/occupancy_grid",
-        # "/free_grid",
-        # "/unknown_grid",
-        "/sensor_point_cloud",
-    ]
+# Topics that exist under /<agent>/... — every entry below is recorded for each
+# agent in the --agents list. The set mirrors mighty.rviz so any topic that is
+# currently visualized in RViz is captured.
+PER_AGENT_TOPICS = [
+    # ---- 2D occupancy / ESDF / persistent maps ----
+    "/occ_2d_topic",
+    "/occ_2d_topic_updates",
+    "/esdf_2d_topic",
+    "/esdf_2d_topic_updates",
+    "/exploration/visited_map",
+    "/exploration/visited_map_updates",
+    "/ground_2d_heat",
+    "/ground_2d_occupied",
+    # ---- 3D occupancy / heat / dynamic / free / unknown clouds ----
+    "/occupancy_grid",
+    "/heat_cloud",
+    "/dynamic_grid",
+    "/free_grid",
+    "/unknown_grid",
+    # ---- Trajectories ----
+    "/traj_committed_colored",
+    "/traj_subopt_colored",
+    "/actual_traj",
+    # ---- Global / hierarchical path ----
+    "/hgp_path_marker",
+    "/original_hgp_path_marker",
+    # ---- Goal / waypoint markers ----
+    "/point_A",
+    "/point_E",
+    "/point_G",
+    "/point_G_term",
+    "/term_goal",
+    # ---- Frontier exploration ----
+    "/exploration/frontiers",
+    # ---- Obstacle tracking ----
+    "/tracked_obstacles",
+    "/cluster_bounding_boxes",
+    "/uncertainty_spheres",
+    # NOTE: /poly_whole uses decomp_ros_msgs/PolyhedronArray, whose
+    # libdecomp_ros_msgs__rosidl_typesupport_fastrtps_cpp.so isn't installed.
+    # Excluded so the recorder doesn't bail. Re-enable after installing
+    # ros-humble-decomp-ros-msgs (or building decomp_ros_msgs from source).
+    # ---- Sensors actually shown in RViz ----
+    "/mid360_PointCloud2",
+    "/d435/depth/color/points",
+    "/d435/color/image_raw",
+    # ---- Robot / FOV / overlays ----
+    "/drone_marker",
+    "/fov",
+    "/vel_text",
+    "/hover_avoidance_viz",
+]
 
-    # Static topics (not agent-specific)
-    static_topics = [
-        "/clicked_point",
-        "/clock",
-        # "/dummy_traj",
-        # "/initialpose",
-        "/parameter_events",
-        # "/performance_metrics",
-        # "/plug/link_states_plug",
-        # "/plug/model_states_plug",
-        # "/trajs",
-        "/rosout",
-        "/tf",
-        "/tf_static",
-        "/map_generator/global_cloud",
+# Topics that are not under /<agent>/... — recorded once regardless of how many
+# agents are in --agents. Includes essentials (tf, rosout, clock).
+STATIC_TOPICS = [
+    # ---- ROS essentials ----
+    "/tf",
+    "/tf_static",
+    "/clock",
+    "/rosout",
+    "/parameter_events",
+    # ---- RViz interaction ----
+    "/clicked_point",
+    "/initialpose",
+    # ---- Sim / world geometry ----
+    "/map_generator/global_cloud",
+    "/shapes_dynamic_mesh",
+    "/tf_axis",
+    "/local_traj_overlay",
+    # ---- Mighty global debug overlays ----
+    "/mighty/poly_time_layer",
+    "/mighty/temporal_test_markers",
+]
 
-        # "/shapes_dynamic_mesh"
-    ]
-    
-    # Generate topics for all agents
+
+def record_ros2_bag(bag_name, bag_path, agents, topics=None, storage="mcap"):
+    # Build per-agent topic list
     all_topics = []
     for agent in agents:
-        for topic in base_topics:
+        for topic in PER_AGENT_TOPICS:
             all_topics.append(f"/{agent}{topic}")
+    all_topics.extend(STATIC_TOPICS)
 
-    # Add static topics (non-agent-specific topics)
-    all_topics.extend(static_topics)
+    if topics is not None:
+        all_topics = topics
 
-    # Use provided topics if specified, otherwise default to generated topics
-    if topics is None:
-        topics = all_topics
-    
-    # Build the ros2 bag record command
-    command = ["ros2", "bag", "record", "-o", os.path.join(bag_path, bag_name)] + topics
-    
-    # Execute the command
+    # Make sure the destination directory exists
+    os.makedirs(bag_path, exist_ok=True)
+
+    out_path = os.path.join(bag_path, bag_name)
+    command = [
+        "ros2", "bag", "record",
+        "-s", storage,                       # mcap is faster + smaller than sqlite3
+        "-o", out_path,
+    ] + all_topics
+
+    print(f"Recording {len(all_topics)} topics → {out_path}")
+    print("Press Ctrl-C to stop recording.")
     try:
         subprocess.run(command, check=True)
-        print(f"Recording started for bag: {bag_name} at path: {bag_path}")
+        print(f"\nBag saved to: {out_path}")
+    except KeyboardInterrupt:
+        print(f"\nRecording stopped. Bag at: {out_path}")
     except subprocess.CalledProcessError as e:
-        print(f"Failed to start recording: {e}")
+        print(f"\nFailed to start recording: {e}")
 
-# Main function
+
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Record a ROS2 bag")
-    parser.add_argument("--bag_number", type=int, help="Bag number to record")
+    parser = argparse.ArgumentParser(description="Record a ROS 2 bag of MIGHTY topics")
+    parser.add_argument(
+        "--bag_name",
+        type=str,
+        default=None,
+        help="Bag name (default: timestamped 'mighty_<YYYYMMDD_HHMMSS>')",
+    )
     parser.add_argument(
         "--bag_path",
         type=str,
-        help="Path to save the bag",
-        default="/home/kkondo/data/multi_mighty",
+        default="/home/kkondo/data/mighty_exploration",
+        help="Directory to write the bag into",
     )
     parser.add_argument(
         "--agents",
         nargs="+",
-        help="List of agents to record",
-        default=['NX01', 'NX02', 'NX03', 'NX04', 'NX05', 'NX06', 'NX07', 'NX08', 'NX09', 'NX10'],
+        default=["NX01"],
+        help="Agent namespaces to record (e.g. NX01 NX02). Defaults to NX01.",
+    )
+    parser.add_argument(
+        "--storage",
+        type=str,
+        default="mcap",
+        choices=["mcap", "sqlite3"],
+        help="Storage backend (mcap recommended)",
     )
     args = parser.parse_args()
 
-    bag_name = "num_" + str(args.bag_number)
-    bag_path = args.bag_path
+    if args.bag_name is None:
+        args.bag_name = "mighty_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # NO string conversion needed – args.agents is already a list of strings
-    agents = args.agents
+    print("Bag name :", args.bag_name)
+    print("Bag path :", args.bag_path)
+    print("Agents   :", args.agents)
+    print("Storage  :", args.storage)
 
-    print("Bag name:", bag_name)
-    print("Bag path:", bag_path)
-    print("Agents:", agents)
-
-    record_ros2_bag(bag_name, bag_path, agents)
-
+    record_ros2_bag(args.bag_name, args.bag_path, args.agents, storage=args.storage)

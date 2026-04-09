@@ -19,9 +19,10 @@
 
 #include <stdio.h>
 
+#include <vector>
+
 #include <Eigen/Geometry>
 #include <Eigen/StdVector>
-#include <vector>
 
 /// Set red font in printf funtion
 #ifndef ANSI_COLOR_RED

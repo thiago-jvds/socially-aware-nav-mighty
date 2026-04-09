@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 """
 MIGHTY Simulation Launcher
 
@@ -69,9 +78,43 @@ def find_setup_bash(args_setup_bash: str = None) -> Path:
     sys.exit(1)
 
 
+def find_workspace_root() -> Path:
+    """Find workspace root relative to this script."""
+    # Script is in: <workspace>/src/mighty/scripts/run_sim.py
+    return Path(__file__).resolve().parent.parent.parent.parent
 
 
-def generate_multiagent_positions(num_agents: int, radius: float = 10.0, z: float = 1.0):
+def exploration_enabled_in_yaml(config_path: Path) -> bool:
+    """Return True if `exploration.enabled: true` appears in the given YAML.
+    Tolerant to the dotted-key form used by ROS 2 parameter files. Used to
+    auto-skip goal_sender when frontier-based exploration would drive the
+    robot itself.
+    """
+    if not config_path.exists():
+        return False
+    try:
+        with open(config_path, 'r') as f:
+            for raw in f:
+                line = raw.split('#', 1)[0].strip()
+                if not line:
+                    continue
+                # Match `exploration.enabled: true` (with optional whitespace).
+                if line.startswith('exploration.enabled'):
+                    _, _, val = line.partition(':')
+                    return val.strip().lower() == 'true'
+    except OSError:
+        pass
+    return False
+
+
+def find_rviz_config() -> Path:
+    """Find the RViz config in the source tree (relative to this script)."""
+    script_path = Path(__file__).resolve()
+    # Script is in: <package>/scripts/run_sim.py, rviz is in: <package>/rviz/mighty.rviz
+    return script_path.parent.parent / 'rviz' / 'mighty.rviz'
+
+
+def generate_multiagent_positions(num_agents: int, radius: float = 10.0, z: float = 1.0, prefix: str = 'NX'):
     """Generate agent positions in a circle formation."""
     agents = []
     for i in range(num_agents):
@@ -84,7 +127,7 @@ def generate_multiagent_positions(num_agents: int, radius: float = 10.0, z: floa
         if yaw_deg > 180:
             yaw_deg -= 360
         agents.append({
-            'namespace': f'NX{i+1:02d}',
+            'namespace': f'{prefix}{i+1:02d}',
             'x': round(x, 3),
             'y': round(y, 3),
             'z': z,
@@ -93,24 +136,27 @@ def generate_multiagent_positions(num_agents: int, radius: float = 10.0, z: floa
     return agents
 
 
-def generate_multiagent_yaml(setup_bash: Path, agents: list, sim_env: str, ros_domain_id: int = 20, radius: float = 10.0, no_goal: bool = False) -> str:
+def generate_multiagent_yaml(setup_bash: Path, agents: list, sim_env: str, ros_domain_id: int = 20, radius: float = 10.0, no_goal: bool = False, rviz_config: Path = None, use_ground_robot: bool = False, agent_prefix: str = 'NX') -> str:
     """Generate YAML for multi-agent fake simulation."""
     panes = []
 
     # Base station (simulator)
+    sim_cmd = 'ros2 launch mighty simulator.launch.py'
+    if rviz_config:
+        sim_cmd += f' rviz_config:={rviz_config}'
     panes.append({
-        'shell_command': [
-            'ros2 launch mighty simulator.launch.py'
-        ]
+        'shell_command': [sim_cmd]
     })
 
     # Agent panes
+    ground_robot_flag = f' use_ground_robot:={str(use_ground_robot).lower()}'
     for agent in agents:
         panes.append({
             'shell_command': [
                 'sleep 10',
                 f"ros2 launch mighty onboard_mighty.launch.py namespace:={agent['namespace']} "
                 f"x:={agent['x']} y:={agent['y']} z:={agent['z']} yaw:={agent['yaw']} sim_env:={sim_env}"
+                f"{ground_robot_flag}"
             ]
         })
 
@@ -120,7 +166,7 @@ def generate_multiagent_yaml(setup_bash: Path, agents: list, sim_env: str, ros_d
         panes.append({
             'shell_command': [
                 'sleep 20',
-                f'ros2 launch mighty goal_monitor.launch.py num_agents:={num_agents} radius:={radius}'
+                f'ros2 launch mighty goal_monitor.launch.py num_agents:={num_agents} radius:={radius} agent_prefix:={agent_prefix} use_ground_robot:={str(use_ground_robot).lower()}'
             ]
         })
 
@@ -145,7 +191,299 @@ unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
     return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
 
 
-def generate_gazebo_yaml(setup_bash: Path, goals: List[tuple], sim_env: str,
+def generate_interactive_yaml(setup_bash: Path, ros_domain_id: int = 20, rviz_config: Path = None) -> str:
+    """Generate YAML for single-agent interactive simulation (click goals in RViz)."""
+    sim_cmd = 'ros2 launch mighty simulator.launch.py'
+    if rviz_config:
+        sim_cmd += f' rviz_config:={rviz_config}'
+    panes = [
+        # Base station (random forest map + RViz)
+        {
+            'shell_command': [sim_cmd]
+        },
+        # Single agent NX01 at center
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch mighty onboard_mighty.launch.py namespace:=NX01 '
+                'x:=0.0 y:=0.0 z:=1.0 yaw:=0.0 sim_env:=fake_sim'
+            ]
+        },
+    ]
+
+    yaml_content = {
+        'session_name': 'mighty_sim',
+        'windows': [{
+            'window_name': 'main',
+            'layout': 'tiled',
+            'shell_command_before': [
+                f'''if [ -z "$SETUP_BASH" ] || [ ! -f "$SETUP_BASH" ]; then
+  echo "[ERROR] SETUP_BASH is missing or invalid: $SETUP_BASH" >&2
+  exit 1
+fi
+unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
+. "$SETUP_BASH"''',
+                f'export ROS_DOMAIN_ID={ros_domain_id}'
+            ],
+            'panes': panes
+        }]
+    }
+
+    return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
+
+
+def generate_multiagent_ground_yaml(setup_bash: Path, agents: list, radius: float,
+                                    mpc_config: Path, ros_domain_id: int = 20) -> str:
+    """Generate YAML for multi-agent ground robot simulation in Gazebo with MPC."""
+    panes = []
+
+    # Base station: Gazebo with ground_robot_forest world + RViz (no dynamic obstacles)
+    panes.append({
+        'shell_command': [
+            'source /usr/share/gazebo/setup.bash',
+            'ros2 launch mighty base_mighty.launch.py '
+            'use_gazebo_gui:=false use_rviz:=true env:=ground_robot_forest use_ground_robot:=true'
+        ]
+    })
+
+    # Per-agent: odom converter + ACL mapper + mighty (MPC) + MPC controller
+    for i, agent in enumerate(agents):
+        ns = agent['namespace']
+
+        # Odom-to-state converter
+        panes.append({
+            'shell_command': [
+                'sleep 10',
+                f'ros2 run mighty convert_odom_to_state --ros-args -r __ns:=/{ns} -r odom:=odom -r state:=state'
+            ]
+        })
+
+        # ACL mapper (obstacle tracker disabled for static env)
+        panes.append({
+            'shell_command': [
+                'sleep 10',
+                f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                f'use_obstacle_tracker:=false param_file:=global_mapper_ground_robot.yaml quad:={ns}'
+            ]
+        })
+
+        # Mighty planner with trajectory tracker
+        panes.append({
+            'shell_command': [
+                'sleep 12',
+                f"ros2 launch mighty onboard_mighty.launch.py namespace:={ns} "
+                f"x:={agent['x']} y:={agent['y']} z:={agent['z']} yaw:={agent['yaw']} "
+                f"sim_env:=gazebo use_ground_robot:=true use_trajectory_tracker:=true "
+                f"num_agents:={len(agents)}"
+            ]
+        })
+
+    # Goal monitor (swap pattern)
+    num_agents = len(agents)
+    panes.append({
+        'shell_command': [
+            'sleep 25',
+            f'ros2 launch mighty goal_monitor.launch.py num_agents:={num_agents} '
+            f'radius:={radius} agent_prefix:=NX goal_tolerance:=1.0 use_ground_robot:=true'
+        ]
+    })
+
+    yaml_content = {
+        'session_name': 'mighty_sim',
+        'windows': [{
+            'window_name': 'main',
+            'layout': 'tiled',
+            'shell_command_before': [
+                f'''if [ -z "$SETUP_BASH" ] || [ ! -f "$SETUP_BASH" ]; then
+  echo "[ERROR] SETUP_BASH is missing or invalid: $SETUP_BASH" >&2
+  exit 1
+fi
+unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
+. "$SETUP_BASH"''',
+                f'export ROS_DOMAIN_ID={ros_domain_id}'
+            ],
+            'panes': panes
+        }]
+    }
+
+    return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
+
+
+def generate_dyn_test_yaml(setup_bash: Path, ros_domain_id: int = 7) -> str:
+    """Generate YAML for dynamic obstacle test: one drone + one dyn obstacle in Gazebo."""
+    panes = [
+        # Base station with Gazebo + 1 dynamic obstacle
+        {
+            'shell_command': [
+                'source /usr/share/gazebo/setup.bash',
+                'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=true '
+                'num_dyn_obstacles:=1 dyn_x_min:=3.0 dyn_x_max:=3.0 dyn_y_min:=0.0 dyn_y_max:=0.0 '
+                'use_gazebo_gui:=false use_rviz:=true env:=empty'
+            ]
+        },
+        # ACL mapper (with obstacle tracker enabled for dynamic obstacle test)
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                'use_obstacle_tracker:=true param_file:=global_mapper.yaml'
+            ]
+        },
+        # Onboard agent NX01 — stationary, no goal sent
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch mighty onboard_mighty.launch.py x:=0.0 y:=0.0 z:=3.0 yaw:=0.0 sim_env:=gazebo'
+            ]
+        },
+    ]
+
+    yaml_content = {
+        'session_name': 'mighty_sim',
+        'windows': [{
+            'window_name': 'main',
+            'layout': 'tiled',
+            'shell_command_before': [
+                f'''if [ -z "$SETUP_BASH" ] || [ ! -f "$SETUP_BASH" ]; then
+  echo "[ERROR] SETUP_BASH is missing or invalid: $SETUP_BASH" >&2
+  exit 1
+fi
+unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
+. "$SETUP_BASH"''',
+                f'export ROS_DOMAIN_ID={ros_domain_id}'
+            ],
+            'panes': panes
+        }]
+    }
+
+    return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
+
+
+def generate_dyn_test_ground_yaml(setup_bash: Path, ros_domain_id: int = 7) -> str:
+    """Generate YAML for ground robot + dynamic obstacle test in Gazebo."""
+    panes = [
+        # Base station with Gazebo (static obstacles only)
+        {
+            'shell_command': [
+                'source /usr/share/gazebo/setup.bash',
+                'ros2 launch mighty base_mighty.launch.py '
+                'use_gazebo_gui:=false use_rviz:=true env:=ground_robot_forest use_ground_robot:=true'
+            ]
+        },
+        # Odom-to-state converter for ground robot
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 run mighty convert_odom_to_state --ros-args -r __ns:=/NX01 -r odom:=odom -r state:=state'
+            ]
+        },
+        # ACL mapper (obstacle tracker disabled for static environment)
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                'use_obstacle_tracker:=false param_file:=global_mapper_ground_robot.yaml'
+            ]
+        },
+        # Onboard agent NX01 — ground robot, no goal sent
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch mighty onboard_mighty.launch.py x:=0.0 y:=0.0 z:=0.0 yaw:=0.0 '
+                'sim_env:=gazebo use_ground_robot:=true'
+            ]
+        },
+    ]
+
+    yaml_content = {
+        'session_name': 'mighty_sim',
+        'windows': [{
+            'window_name': 'main',
+            'layout': 'tiled',
+            'shell_command_before': [
+                f'''if [ -z "$SETUP_BASH" ] || [ ! -f "$SETUP_BASH" ]; then
+  echo "[ERROR] SETUP_BASH is missing or invalid: $SETUP_BASH" >&2
+  exit 1
+fi
+unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
+. "$SETUP_BASH"''',
+                f'export ROS_DOMAIN_ID={ros_domain_id}'
+            ],
+            'panes': panes
+        }]
+    }
+
+    return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
+
+
+def generate_dyn_test_ground_mpc_yaml(setup_bash: Path, ros_domain_id: int = 7) -> str:
+    """Generate YAML for ground robot + MPC + static obstacle test in Gazebo."""
+    mpc_config = find_workspace_root() / 'src' / 'mpc' / 'config' / 'mpc_sim.yaml'
+    panes = [
+        # Base station with Gazebo + 1 dynamic obstacle
+        {
+            'shell_command': [
+                'source /usr/share/gazebo/setup.bash',
+                'ros2 launch mighty base_mighty.launch.py use_dyn_obs:=true '
+                'num_dyn_obstacles:=1 dyn_x_min:=3.0 dyn_x_max:=3.0 dyn_y_min:=0.0 dyn_y_max:=0.0 '
+                'dyn_z_min:=0.3 dyn_z_max:=0.3 dyn_scale_z_min:=0.0 dyn_scale_z_max:=0.0 '
+                'use_gazebo_gui:=false use_rviz:=true env:=ground_robot_forest use_ground_robot:=true'
+            ]
+        },
+        # Odom-to-state converter for ground robot
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 run mighty convert_odom_to_state --ros-args -r __ns:=/NX01 -r odom:=odom -r state:=state'
+            ]
+        },
+        # ACL mapper (obstacle tracker enabled for dynamic obstacle)
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                'use_obstacle_tracker:=true param_file:=global_mapper_ground_robot.yaml'
+            ]
+        },
+        # Onboard agent NX01 — ground robot with MPC enabled (no pure pursuit)
+        {
+            'shell_command': [
+                'sleep 10',
+                'ros2 launch mighty onboard_mighty.launch.py x:=0.0 y:=0.0 z:=0.0 yaw:=0.0 '
+                'sim_env:=gazebo use_ground_robot:=true use_trajectory_tracker:=true'
+            ]
+        },
+        # MPC controller (subscribes to SpeedyPath, publishes cmd_vel)
+        {
+            'shell_command': [
+                'sleep 15',
+                f'ros2 launch mpc mpc.launch.py namespace:=NX01 params_file:={mpc_config}'
+            ]
+        },
+    ]
+
+    yaml_content = {
+        'session_name': 'mighty_sim',
+        'windows': [{
+            'window_name': 'main',
+            'layout': 'tiled',
+            'shell_command_before': [
+                f'''if [ -z "$SETUP_BASH" ] || [ ! -f "$SETUP_BASH" ]; then
+  echo "[ERROR] SETUP_BASH is missing or invalid: $SETUP_BASH" >&2
+  exit 1
+fi
+unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
+. "$SETUP_BASH"''',
+                f'export ROS_DOMAIN_ID={ros_domain_id}'
+            ],
+            'panes': panes
+        }]
+    }
+
+    return yaml.dump(yaml_content, default_flow_style=False, sort_keys=False)
+
+
+def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
                          env: str = 'hard_forest',
                          start_pos: tuple = (0, 0, 3.0), start_yaw: float = 1.57,
                          ros_domain_id: int = 7, use_rviz: bool = True,
@@ -182,6 +520,7 @@ def generate_gazebo_yaml(setup_bash: Path, goals: List[tuple], sim_env: str,
                 'sleep 10',
                 'source ~/code/mighty_ws/install/setup.bash',
                 f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
+                f'use_obstacle_tracker:=false '
                 f'param_file:={"global_mapper_ground_robot.yaml" if use_ground_robot else "global_mapper.yaml"}'
             ]
         },
@@ -249,9 +588,9 @@ def main():
 
     parser.add_argument(
         '--mode', '-m',
-        choices=['multiagent', 'gazebo'],
+        choices=['multiagent', 'multiagent-ground', 'gazebo', 'interactive', 'dyn-test', 'dyn-test-ground', 'dyn-test-ground-mpc'],
         required=True,
-        help='Simulation mode: multiagent (fake sensing) or gazebo (single agent with ACL mapper)'
+        help='Simulation mode: multiagent, gazebo, interactive, dyn-test (UAV + dyn obstacle), or dyn-test-ground (ground robot + dyn obstacle)'
     )
 
     parser.add_argument(
@@ -365,13 +704,42 @@ def main():
 
     # Find setup.bash path
     setup_bash = find_setup_bash(args.setup_bash)
+    rviz_config = find_rviz_config()
     print(f"[INFO] Using setup.bash: {setup_bash}")
+    print(f"[INFO] Using rviz config: {rviz_config}")
 
     # Determine sim_env and generate YAML
-    if args.mode == 'multiagent':
+    if args.mode == 'dyn-test':
+        yaml_content = generate_dyn_test_yaml(setup_bash, args.ros_domain_id)
+        print(f"[INFO] Mode: Dynamic obstacle test (1 drone + 1 dyn obstacle in Gazebo)")
+        print(f"[INFO] Drone at (0, 0, 3.0) facing +x, no goal — observe heat map in RViz")
+    elif args.mode == 'dyn-test-ground':
+        yaml_content = generate_dyn_test_ground_yaml(setup_bash, args.ros_domain_id)
+        print(f"[INFO] Mode: Ground robot + dynamic obstacle test in Gazebo")
+        print(f"[INFO] Ground robot at (0, 0, 0) facing +x, obstacle at ~(3, 0, 0.3)")
+    elif args.mode == 'dyn-test-ground-mpc':
+        yaml_content = generate_dyn_test_ground_mpc_yaml(setup_bash, args.ros_domain_id)
+        print(f"[INFO] Mode: Ground robot + MPC + dynamic obstacle test in Gazebo")
+        print(f"[INFO] Ground robot at (0, 0, 0), MPC controller, obstacle at ~(3, 0, 0.3)")
+        print(f"[INFO] Use '2D Goal Pose' in RViz to send goals")
+    elif args.mode == 'interactive':
+        yaml_content = generate_interactive_yaml(setup_bash, args.ros_domain_id, rviz_config=rviz_config)
+        print(f"[INFO] Mode: Interactive single-agent simulation (sim_env=fake_sim)")
+        print(f"[INFO] Agent NX01 at (0, 0, 1.0) — use '2D Goal Pose' in RViz to send goals")
+    elif args.mode == 'multiagent-ground':
+        num = args.num_agents if args.num_agents != 10 else 4
+        radius = args.radius if args.radius != 10.0 else 12.0
+        agents = generate_multiagent_positions(num, radius, z=0.0, prefix='NX')
+        mpc_config = find_workspace_root() / 'src' / 'mpc' / 'config' / 'mpc_sim.yaml'
+        yaml_content = generate_multiagent_ground_yaml(setup_bash, agents, radius,
+                                                       mpc_config, args.ros_domain_id)
+        print(f"[INFO] Mode: Multi-agent ground robot (Gazebo + MPC) with {num} agents (radius={radius})")
+        for a in agents:
+            print(f"[INFO]   {a['namespace']}: ({a['x']}, {a['y']}, {a['z']}) yaw={a['yaw']}")
+    elif args.mode == 'multiagent':
         sim_env = 'fake_sim'
         agents = generate_multiagent_positions(args.num_agents, args.radius)
-        yaml_content = generate_multiagent_yaml(setup_bash, agents, sim_env, args.ros_domain_id, args.radius, no_goal=args.no_goal)
+        yaml_content = generate_multiagent_yaml(setup_bash, agents, sim_env, args.ros_domain_id, args.radius, no_goal=args.no_goal, rviz_config=rviz_config)
         print(f"[INFO] Mode: Multi-agent simulation with {args.num_agents} agents (sim_env={sim_env})")
     else:  # gazebo
         sim_env = 'gazebo'
@@ -400,6 +768,18 @@ def main():
             start_pos[2] = 0.0  # Ground robot base_link at z=0 (wheels at ground)
         start_pos = tuple(start_pos)
 
+        # If frontier-based exploration is enabled in the ground-robot config,
+        # auto-skip the goal_sender pane — the exploration loop will issue
+        # goals and a manual goal_sender publication would just preempt it.
+        no_goal = args.no_goal
+        if use_ground_robot and not no_goal:
+            cfg_path = (Path(__file__).resolve().parent.parent
+                        / 'config' / 'mighty_ground_robot.yaml')
+            if exploration_enabled_in_yaml(cfg_path):
+                no_goal = True
+                print(f"[INFO] Exploration enabled in {cfg_path.name} — "
+                      f"skipping goal_sender (frontier loop drives the robot)")
+
         yaml_content = generate_gazebo_yaml(
             setup_bash,
             goals=[tuple(g) for g in args.goal],
@@ -419,7 +799,8 @@ def main():
         if use_ground_robot:
             print(f"[INFO] Vehicle: Ground robot (Pioneer 3-AT)")
         print(f"[INFO] Start: ({start_pos[0]}, {start_pos[1]}, {start_pos[2]})")
-        print(f"[INFO] Goals: {args.goal}")
+        if not no_goal:
+            print(f"[INFO] Goal: ({args.goal[0]}, {args.goal[1]}, {args.goal[2]})")
 
     if args.dry_run:
         print("\n[DRY RUN] Generated YAML:")

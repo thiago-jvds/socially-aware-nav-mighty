@@ -10,8 +10,7 @@
 
 void vectorOfVectors2MarkerArray(vec_Vecf<3> traj, visualization_msgs::msg::MarkerArray* m_array,
                                  std_msgs::msg::ColorRGBA color, int type,
-                                 std::vector<double> radii,
-                                 const std::string& frame_id) {
+                                 std::vector<double> radii, const std::string& frame_id) {
   if (traj.size() == 0) return;
   geometry_msgs::msg::Point p_last = eigen2point(traj[0]);
 
@@ -66,7 +65,12 @@ void pathLineDotsToMarkerArray(const vec_Vecf<3>& traj,
   // ---------- LINE_STRIP ----------
   visualization_msgs::msg::Marker line;
   line.header.frame_id = frame_id;
-  line.header.stamp = rclcpp::Clock().now();
+  // Stamp = 0 tells RViz to use the *latest* available TF instead of the
+  // exact timestamp. This is the standard pattern for visualization markers
+  // and is REQUIRED here because rclcpp::Clock().now() builds a brand-new
+  // clock object that uses wall time — wrong under Gazebo sim_time, which
+  // would cause RViz to drop markers with TF/timestamp warnings.
+  line.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   line.ns = "global_path_line";
   line.id = base_id + 1;
   line.type = visualization_msgs::msg::Marker::LINE_STRIP;
@@ -88,7 +92,7 @@ void pathLineDotsToMarkerArray(const vec_Vecf<3>& traj,
   // ---------- SPHERE_LIST (dots) ----------
   visualization_msgs::msg::Marker dots;
   dots.header.frame_id = frame_id;
-  dots.header.stamp = rclcpp::Clock().now();
+  dots.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   dots.ns = "global_path_dots";
   dots.id = base_id + 2;
   dots.type = visualization_msgs::msg::Marker::SPHERE_LIST;
@@ -794,7 +798,13 @@ visualization_msgs::msg::MarkerArray stateVector2ColoredMarkerArray(const std::v
 
   visualization_msgs::msg::Marker m;
   m.header.frame_id = frame_id;
-  m.header.stamp = stamp;
+  // Stamp = 0 → "use latest TF" in RViz. Without this, RViz under sim_time
+  // sometimes drops these markers when the node-clock stamp is slightly
+  // ahead of the TF buffer for the requested frame. The `stamp` parameter
+  // is intentionally unused; we keep it in the signature so existing call
+  // sites stay binary-compatible.
+  (void)stamp;
+  m.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   m.ns = "state_vec";
   m.id = type;  // single marker per type
   m.action = visualization_msgs::msg::Marker::ADD;

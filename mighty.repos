@@ -13,7 +13,7 @@ repositories:
   dynus_interfaces:
     type: git
     url: https://github.com/kotakondo/dynus_interfaces.git
-    version: ec381d5efeaaa5d25c73a3453d4dc78d59a6594c
+    version: c43bcec6d4b67c6f8a8baabb1b2f8c1ba8b919d1
   gazebo_ros_pkgs:
     type: git
     url: https://github.com/kotakondo/gazebo_ros_pkgs.git

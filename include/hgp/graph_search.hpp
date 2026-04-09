@@ -13,19 +13,21 @@
 
 #pragma once
 
-#include <boost/heap/d_ary_heap.hpp>  // boost::heap::d_ary_heap
-#include <hgp/data_type.hpp>
-#include <hgp/map_util.hpp>  // mighty::MapUtil
-#include <limits>            // std::numeric_limits
-#include <memory>            // std::shared_ptr
-#include <mutex>             // std::mutex
-#include <mighty/mighty_type.hpp>
-#include <mighty/utils.hpp>
-#include <timer.hpp>
+#include <limits>         // std::numeric_limits
+#include <memory>         // std::shared_ptr
+#include <mutex>          // std::mutex
 #include <unordered_map>  // std::unordered_map
 #include <vector>         // std::vector
 
-// TODO: ROS dependency (not ideal)
+#include <hgp/data_type.hpp>
+#include <hgp/map_util.hpp>  // mighty::MapUtil
+#include <mighty/esdf_grid_2d.hpp>
+#include <mighty/mighty_type.hpp>
+#include <mighty/utils.hpp>
+
+#include <boost/heap/d_ary_heap.hpp>  // boost::heap::d_ary_heap
+#include <timer.hpp>
+
 #include <rclcpp/rclcpp.hpp>
 
 namespace mighty {
@@ -57,7 +59,7 @@ struct State {
   int x, y, z = 0;
   /// direction
   int dx, dy, dz;  // discrete coordinates of this node
-  /// id of predicessors
+  /// id of predecessors
   int parentId = -1;
 
   /// pointer to heap location
@@ -90,7 +92,11 @@ struct State {
       : id(id), x(x), y(y), z(z), dx(dx), dy(dy), dz(dz), g(g) {}
 };
 
-/// Search and prune neighbors for JPS 2D
+/** @brief Precomputed neighbor tables for 2D Jump Point Search.
+ *
+ *  Stores natural neighbors (ns), forced-neighbor checks (f1), and
+ *  forced-neighbor additions (f2) for each direction in the 2D grid.
+ */
 struct JPS2DNeib {
   // for each (dx,dy) these contain:
   //    ns: neighbors that are always added
@@ -220,6 +226,13 @@ class GraphSearch {
    */
   void setStartAndGoal(const Vecf<3>& start, const Vecf<3>& goal);
 
+  /** @brief Set ESDF grid for distance-based A* cost (ground robot only).
+   *  @param grid ESDF grid pointer (may be nullptr to disable).
+   *  @param weight Cost weight for ESDF penalty.
+   *  @param d_safe Safety distance threshold [m].
+   */
+  void setEsdfGrid(std::shared_ptr<const EsdfGrid2D> grid, double weight, double d_safe);
+
   /** @brief Set maximum dynamic constraints (velocity, acceleration, jerk).
    *  @param max_values Array of three values: [v_max, a_max, j_max].
    */
@@ -322,6 +335,11 @@ class GraphSearch {
 
   // Map util
   std::shared_ptr<mighty::VoxelMapUtil> map_util_;
+
+  // ESDF for ground robot A* cost (optional)
+  std::shared_ptr<const EsdfGrid2D> esdf_grid_;
+  double esdf_weight_astar_ = 0.0;
+  double esdf_d_safe_astar_ = 0.0;
 
   // Set start and goal
   Vecf<3> start_;

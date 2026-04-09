@@ -13,7 +13,6 @@
 #pragma once
 
 #include <omp.h>
-#include <pcl/kdtree/kdtree_flann.h>
 
 #include <algorithm>
 #include <cmath>
@@ -21,10 +20,16 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+
+#include <pcl/kdtree/kdtree_flann.h>
+
 #include <mighty/mighty_type.hpp>
 
 #include "hgp/data_type.hpp"
+
 #include "timer.hpp"
+#include <mighty/esdf_grid_2d.hpp>
+#include <mighty/occ_grid_2d.hpp>
 
 namespace mighty {
 
@@ -170,15 +175,17 @@ class MapUtil {
 
     // 2) Compute how many cells below/above center we keep,
     //    strictly within [z_ground, z_max]
-    int halfZ = dimZ / 2;
-    int down = halfZ, up = halfZ;
+    // Split dimZ into down/up halves. Use ceiling for `up` so dimZ==1 yields
+    // down=0/up=1 (a single z-slice at center) instead of collapsing to 0.
+    int down = dimZ / 2;
+    int up = (dimZ + 1) / 2;
     // world coords of bottom slice:
-    float bot = center_map.z() - halfZ * res_;
+    float bot = center_map.z() - down * res_;
     if (bot < z_ground) down = std::max(int(std::floor((center_map.z() - z_ground) / res_)), 0);
     // top slice:
-    float top = center_map.z() + halfZ * res_;
+    float top = center_map.z() + up * res_;
     if (top > z_max) up = std::max(int(std::floor((z_max - center_map.z()) / res_)), 1);
-    dimZ = down + up;
+    dimZ = std::max(down + up, 1);
 
     // 3) Compute origin (global coords of cell (0,0,0)) and snap to resolution grid
     //    so that voxel boundaries align with the global mapper's grid
@@ -592,7 +599,8 @@ class MapUtil {
   }
 
   /** @brief Set a per-seed radius function for static heat halo computation.
-   *  @param fn Function mapping seed voxel center (world coords) to halo radius; empty uses default.
+   *  @param fn Function mapping seed voxel center (world coords) to halo radius; empty uses
+   * default.
    *  @param default_radius_m Fallback radius when fn is not set.
    */
   void setStaticHeatRadiusFunction(const std::function<float(const Eigen::Vector3f&)>& fn,
@@ -782,7 +790,8 @@ class MapUtil {
     z_map_max_ = z_max;
   }
 
-  /** @brief Set the assumed maximum velocity of dynamic obstacles for inflation radius computation. */
+  /** @brief Set the assumed maximum velocity of dynamic obstacles for inflation radius computation.
+   */
   void setObstMaxVelocity(float obst_max_vel) {
     // Set obstacle maximum velocity
     obst_max_vel_ = obst_max_vel;
@@ -822,7 +831,7 @@ class MapUtil {
 
       // Increase the radius until a free point is found
       for (float radius = 1.0; radius < 5.0;
-           radius += 0.5)  // TODO: expose the radius as a parameter
+           radius += 0.5)
       {
         neighbor_indices.clear();
         getNeighborIndices(point_int, neighbor_indices, radius);
@@ -949,7 +958,6 @@ class MapUtil {
     }
 
     // Add buffer to the min and max coordinates to give some margin around the box.
-    // TODO: expose this buffer as a parameter.
     min -= Vec3f(0.5, 0.5, 0.5);  // min -= Vec3f
     max += Vec3f(0.5, 0.5, 0.5);  // max += Vec3f
 
@@ -1774,8 +1782,7 @@ class MapUtil {
    *  @param cost_mode "max" or "avg" aggregation of neighbor height deltas.
    */
   void buildGroundMap2D(float obstacle_min_height, float terrain_cost_weight,
-                        const std::string& cost_mode,
-                        bool use_column_any_occupied = true,
+                        const std::string& cost_mode, bool use_column_any_occupied = true,
                         float column_min_z = 0.0f) {
     if (dim_(0) <= 0 || dim_(1) <= 0 || dim_(2) <= 0) return;
 
@@ -1798,9 +1805,8 @@ class MapUtil {
         bool has_unknown = false;
 
         for (int z = 0; z < dimZ; ++z) {
-          const size_t idx_3d =
-              static_cast<size_t>(x) + static_cast<size_t>(dimX) * y +
-              static_cast<size_t>(dimX) * static_cast<size_t>(dimY) * z;
+          const size_t idx_3d = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y +
+                                static_cast<size_t>(dimX) * static_cast<size_t>(dimY) * z;
 
           if (map_[idx_3d] == val_occ_) {
             const float world_z = origin_d_(2) + (z + 0.5f) * res_;
@@ -1896,13 +1902,15 @@ class MapUtil {
     if (static_heat_enabled_) {
       const int Rcell = static_cast<int>(std::ceil(static_heat_rmax_m_ / res_));
       // Precompute 2D offsets within radius
-      struct Off2D { int dx, dy; float d_m; };
+      struct Off2D {
+        int dx, dy;
+        float d_m;
+      };
       std::vector<Off2D> offsets_2d;
       for (int dx = -Rcell; dx <= Rcell; ++dx) {
         for (int dy = -Rcell; dy <= Rcell; ++dy) {
           float d_m = res_ * std::sqrt(float(dx * dx + dy * dy));
-          if (d_m <= static_heat_rmax_m_)
-            offsets_2d.push_back({dx, dy, d_m});
+          if (d_m <= static_heat_rmax_m_) offsets_2d.push_back({dx, dy, d_m});
         }
       }
 
@@ -1919,9 +1927,9 @@ class MapUtil {
             // Distance-decay heat
             const float u = std::min(1.0f, std::max(0.0f, o.d_m / static_heat_rmax_m_));
             const float base = 1.0f - u;
-            float pw = (static_heat_p_ == 2) ? base * base :
-                        (static_heat_p_ == 3) ? base * base * base :
-                        std::pow(base, float(static_heat_p_));
+            float pw = (static_heat_p_ == 2)   ? base * base
+                       : (static_heat_p_ == 3) ? base * base * base
+                                               : std::pow(base, float(static_heat_p_));
             float w = std::min(static_heat_alpha_ * pw, static_heat_Hmax_);
             if (w > heat_2d_[idx]) heat_2d_[idx] = w;
           }
@@ -1929,8 +1937,23 @@ class MapUtil {
       }
     }
 
-    has_2d_map_ = true;
+    // Step 6: Project 3D dynamic heat into 2D (max over z columns)
+    if (dynamic_heat_enabled_ && !heat_.empty()) {
+      for (int x = 0; x < dimX; ++x) {
+        for (int y = 0; y < dimY; ++y) {
+          float max_h = 0.0f;
+          for (int z = 0; z < dimZ; ++z) {
+            const size_t idx_3d =
+                static_cast<size_t>(x) + dimX * (static_cast<size_t>(y) + dimY * z);
+            if (idx_3d < heat_.size()) max_h = std::max(max_h, heat_[idx_3d]);
+          }
+          const size_t idx_2d = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y;
+          if (max_h > heat_2d_[idx_2d]) heat_2d_[idx_2d] = max_h;
+        }
+      }
+    }
 
+    has_2d_map_ = true;
   }
 
   /** @brief Check if a 2D ground map has been built. */
@@ -2004,6 +2027,134 @@ class MapUtil {
   void get2DDimensions(int& dimX, int& dimY) const {
     dimX = dim_(0);
     dimY = dim_(1);
+  }
+
+  /** @brief Build 2D map entirely from ESDF grid. Trusts ESDF for both occupancy and heat.
+   *
+   *  - Occupied: ESDF distance = 0 (on obstacle in mapper's grid)
+   *  - Heat: linear ramp from h_max at d=0 → 0 at d=d_safe
+   *  - No point cloud processing or inflation involved.
+   *
+   *  @param esdf   The 2D ESDF grid from the mapper.
+   *  @param d_safe Distance at which heat reaches 0.
+   *  @param h_max  Maximum heat value (at obstacle surface).
+   */
+  void buildMap2DFromEsdf(const EsdfGrid2D& esdf, double d_safe, double h_max) {
+    const int dimX = dim_(0);
+    const int dimY = dim_(1);
+    const size_t n2d = static_cast<size_t>(dimX) * dimY;
+
+    map_2d_.assign(n2d, val_free_);
+    heat_2d_.assign(n2d, 0.0f);
+
+    // A MIGHTY cell of width res_ centered at (wx, wy) intersects an obstacle
+    // if the ESDF distance anywhere inside the cell is <= 0. Querying only the
+    // center misses obstacles that clip the cell's corners. The half-diagonal
+    // of the cell (res_*sqrt(2)/2) is the worst-case distance from the center
+    // to any point inside, so anything with center distance <= half_diag could
+    // be occupied somewhere within the cell.
+    const double half_diag = res_ * 0.5 * std::sqrt(2.0);
+
+    for (int y = 0; y < dimY; ++y) {
+      for (int x = 0; x < dimX; ++x) {
+        const double wx = origin_d_(0) + (x + 0.5) * res_;
+        const double wy = origin_d_(1) + (y + 0.5) * res_;
+        const size_t idx = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y;
+
+        if (esdf.isInBounds(wx, wy)) {
+          const double d = esdf.queryDistance(wx, wy);
+          if (d <= half_diag) {
+            map_2d_[idx] = val_occ_;
+            heat_2d_[idx] = static_cast<float>(h_max);
+          } else if (d < d_safe) {
+            heat_2d_[idx] = static_cast<float>(h_max * (1.0 - d / d_safe));
+          }
+        }
+        // Outside ESDF bounds: leave as free (initialized above). Marking
+        // OOB as occupied creates phantom walls when MIGHTY's robot-centered
+        // window extends past the mapper's fixed-origin coverage.
+      }
+    }
+    has_2d_map_ = true;
+  }
+
+  /** @brief Build 2D map from binary occupancy grid with BFS distance-based heat.
+   *
+   *  Occupancy comes directly from the mapper's occ_2d_topic (binary 0/100).
+   *  Heat is computed via BFS distance transform: h_max at obstacle → 0 at d_safe.
+   *
+   *  @param occ    Binary 2D occupancy grid from mapper.
+   *  @param d_safe Distance at which heat reaches 0 [m].
+   *  @param h_max  Maximum heat value at occupied cells.
+   */
+  void buildMap2DFromOcc2D(const OccGrid2D& occ, double d_safe, double h_max) {
+    const int dimX = dim_(0);
+    const int dimY = dim_(1);
+    const size_t n2d = static_cast<size_t>(dimX) * dimY;
+
+    map_2d_.assign(n2d, val_free_);
+    heat_2d_.assign(n2d, 0.0f);
+
+    // Compute distance field from the binary occupancy grid (truncated at d_safe)
+    std::vector<float> dist = occ.computeDistanceField(d_safe);
+
+    const double inv_occ_res = occ.invResolution();
+    const int occ_w = occ.width();
+    const int occ_h = occ.height();
+    const auto& occ_data = occ.occupiedData();
+
+    for (int y = 0; y < dimY; ++y) {
+      for (int x = 0; x < dimX; ++x) {
+        // Convert MIGHTY grid cell to world coordinates (cell extent is [wx-h, wx+h])
+        const double wx = origin_d_(0) + (x + 0.5) * res_;
+        const double wy = origin_d_(1) + (y + 0.5) * res_;
+        const double half = 0.5 * res_;
+        const size_t idx = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y;
+
+        // Range of underlying occ-grid cells overlapping this MIGHTY cell.
+        int ox_min = static_cast<int>(std::floor((wx - half - occ.originX()) * inv_occ_res));
+        int ox_max = static_cast<int>(std::floor((wx + half - occ.originX()) * inv_occ_res));
+        int oy_min = static_cast<int>(std::floor((wy - half - occ.originY()) * inv_occ_res));
+        int oy_max = static_cast<int>(std::floor((wy + half - occ.originY()) * inv_occ_res));
+
+        // Clip to source grid. Cells with no overlap at all stay free
+        // (don't ring the map with phantom walls when MIGHTY's window
+        // extends past the mapper's fixed-origin coverage).
+        ox_min = std::max(ox_min, 0);
+        oy_min = std::max(oy_min, 0);
+        ox_max = std::min(ox_max, occ_w - 1);
+        oy_max = std::min(oy_max, occ_h - 1);
+        if (ox_min > ox_max || oy_min > oy_max) {
+          continue;
+        }
+
+        // Mark occupied if ANY underlying source cell is occupied. Otherwise
+        // pull heat from the nearest underlying source cell (smallest d → max heat).
+        // NOTE: occ_data only flags true-occupied cells (>=100). Unknown cells
+        // (-1) are implicitly traversable for HGP A* — this gives us the
+        // "plan through unknown" semantics that frontier exploration needs.
+        bool any_occ = false;
+        float min_d = static_cast<float>(d_safe);
+        for (int oy = oy_min; oy <= oy_max && !any_occ; ++oy) {
+          for (int ox = ox_min; ox <= ox_max; ++ox) {
+            const size_t oidx = static_cast<size_t>(oy) * occ_w + ox;
+            if (occ_data[oidx]) {
+              any_occ = true;
+              break;
+            }
+            if (dist[oidx] < min_d) min_d = dist[oidx];
+          }
+        }
+
+        if (any_occ) {
+          map_2d_[idx] = val_occ_;
+          heat_2d_[idx] = static_cast<float>(h_max);
+        } else if (min_d < static_cast<float>(d_safe)) {
+          heat_2d_[idx] = static_cast<float>(h_max * (1.0 - min_d / d_safe));
+        }
+      }
+    }
+    has_2d_map_ = true;
   }
 
  protected:

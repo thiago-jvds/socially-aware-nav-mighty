@@ -53,7 +53,7 @@ link_directories(${PCL_LIBRARY_DIRS} ${BOOST_LIBRARY_DIRS} ${GAZEBO_LIBRARY_DIRS
 add_definitions(${PCL_DEFINITIONS})
 
 # add executables
-add_executable(mighty src/mighty/mighty_node.cpp src/mighty/mighty.cpp src/hgp/hgp_manager.cpp src/hgp/utils.cpp src/hgp/hgp_planner.cpp src/hgp/graph_search.cpp src/mighty/utils.cpp src/mighty/lbfgs_solver.cpp src/mighty/lbfgs_solver_utils.cpp)
+add_executable(mighty src/mighty/mighty_node.cpp src/mighty/mighty.cpp src/hgp/hgp_manager.cpp src/hgp/utils.cpp src/hgp/hgp_planner.cpp src/hgp/graph_search.cpp src/mighty/utils.cpp src/mighty/lbfgs_solver.cpp src/mighty/lbfgs_solver_utils.cpp src/mighty/frontier_detector.cpp src/mighty/frontier_manager.cpp)
 target_link_libraries(mighty ${PCL_LIBRARIES})
 ament_target_dependencies(mighty rclcpp example_interfaces dynus_interfaces visualization_msgs Eigen3 decomp_ros_msgs sensor_msgs std_msgs nav_msgs decomp_rviz_plugins decomp_test_node tf2_geometry_msgs tf2 tf2_ros tf2_eigen std_srvs pcl_ros)
 
@@ -66,6 +66,10 @@ ament_target_dependencies(fake_sim rclcpp rclcpp_components visualization_msgs d
 add_executable(pure_pursuit src/mighty/pure_pursuit.cpp)
 target_link_libraries(pure_pursuit)
 ament_target_dependencies(pure_pursuit rclcpp dynus_interfaces geometry_msgs visualization_msgs)
+
+add_executable(trajectory_tracker src/mighty/trajectory_tracker.cpp)
+target_link_libraries(trajectory_tracker)
+ament_target_dependencies(trajectory_tracker rclcpp dynus_interfaces geometry_msgs visualization_msgs)
 
 # Add odom to state converter
 add_executable(convert_odom_to_state src/mighty/convert_odom_to_state.cpp)
@@ -96,7 +100,7 @@ add_library(imu_plugin SHARED src/sim/gazebo_ros_imu_sensor.cpp)
 target_link_libraries(imu_plugin ${GAZEBO_LIBRARIES})
 ament_target_dependencies(imu_plugin sensor_msgs gazebo_ros)
 
-# For dynamic forest node
+# For dynamic forest node (simulated dynamic obstacles)
 add_executable(dynamic_forest_node src/sim/dynamic_forest_node.cpp)
 ament_target_dependencies(dynamic_forest_node
   rclcpp
@@ -124,7 +128,6 @@ install(DIRECTORY
 launch
 config
 rviz
-tmux
 worlds
 urdf
 meshes
@@ -136,6 +139,7 @@ install(TARGETS
   mighty
   fake_sim
   pure_pursuit
+  trajectory_tracker
   convert_odom_to_state
   convert_vicon_to_state
   convert_velodyne_to_ros_time
@@ -161,11 +165,54 @@ install(PROGRAMS
   scripts/goal_sender.py
   scripts/goal_monitor_node.py
   scripts/generate_random_forest.py
-  benchmarking/dynamic_obstacle_benchmark_node.py
   benchmarking/unc_benchmark_node.py
   scripts/repub_rviz_2Dgoal.py
   scripts/frame_align_publisher.py
+  scripts/formation_viz_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_occ_grid_2d_unknown
+    src/test/test_occ_grid_2d_unknown.cpp)
+  ament_target_dependencies(test_occ_grid_2d_unknown
+    rclcpp Eigen3 nav_msgs)
+
+  ament_add_gtest(test_frontier_detector
+    src/test/test_frontier_detector.cpp
+    src/mighty/frontier_detector.cpp)
+  ament_target_dependencies(test_frontier_detector
+    rclcpp Eigen3 nav_msgs)
+
+  ament_add_gtest(test_frontier_manager
+    src/test/test_frontier_manager.cpp
+    src/mighty/frontier_detector.cpp
+    src/mighty/frontier_manager.cpp)
+  ament_target_dependencies(test_frontier_manager
+    rclcpp Eigen3 nav_msgs)
+
+  ament_add_gtest(test_gradient_check
+    src/test/test_gradient_check.cpp
+    src/mighty/lbfgs_solver.cpp
+    src/mighty/lbfgs_solver_utils.cpp)
+  ament_target_dependencies(test_gradient_check
+    rclcpp example_interfaces dynus_interfaces visualization_msgs Eigen3
+    decomp_ros_msgs sensor_msgs std_msgs decomp_rviz_plugins decomp_test_node
+    tf2_geometry_msgs)
+
+  ament_add_gtest(test_formation_cost
+    src/test/test_formation_cost.cpp
+    src/mighty/lbfgs_solver.cpp
+    src/mighty/lbfgs_solver_utils.cpp)
+  ament_target_dependencies(test_formation_cost
+    rclcpp example_interfaces dynus_interfaces visualization_msgs Eigen3
+    decomp_ros_msgs sensor_msgs std_msgs decomp_rviz_plugins decomp_test_node
+    tf2_geometry_msgs)
+endif()
 
 ament_package()

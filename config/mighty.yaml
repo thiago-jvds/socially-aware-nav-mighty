@@ -41,10 +41,21 @@ mighty_node:
         sim_frame_offset_qz: 0.0                        # [-]
         sim_frame_offset_qw: 1.0                        # [-]
 
+        # --- Formation flight ---
+        # When use_formation: true, this agent penalizes deviation from a desired
+        # offset to each listed neighbor throughout its trajectory (cost J_form),
+        # and also subscribes to /swarm_goal (shared topic) to apply formation_self_offset
+        # before pinning its terminal waypoint.
+        use_formation: false                            # [-] Master switch
+        formation_weight: 0.0                           # [-] L-BFGS weight on J_form
+        formation_self_offset: [0.0, 0.0, 0.0]          # [m] δ_i: this agent's offset from /swarm_goal
+        formation_neighbor_ids: []                      # [int] IDs of agents to keep formation with
+        formation_neighbor_offsets: []                  # [m] flat 3*N: δ_ij for each neighbor in same order as ids
+
         # --- Vehicle Dynamic Limits ---
         v_max: 1.0                                      # [m/s]   Max velocity
-        a_max: 50.0                                     # [m/s^2] Max acceleration
-        j_max: 100.0                                    # [m/s^3] Max jerk
+        a_max: 5.0                                     # [m/s^2] Max acceleration
+        j_max: 10.0                                    # [m/s^3] Max jerk
         w_max: 1.0                                      # [rad/s] Max yaw rate (~4.0 for hardware)
         drone_bbox: [0.5, 0.5, 0.5]                     # [m] Vehicle bounding box (include prop guards for hardware)
 
@@ -87,9 +98,9 @@ mighty_node:
 
         # --- Global Planner ---
         global_planner: "astar_heat"                    # ["sjps", "astar_heat"]
-        inflation_dgp: 0.45                             # [m] Static obstacle inflation for global A* planning
-        dgp_timeout_duration_ms: 10000                  # [ms] Global planner timeout
-        max_expand: 50000                               # [-] Max A* node expansions
+        inflation_hgp: 0.45                             # [m] Static obstacle inflation for global A* planning
+        hgp_timeout_duration_ms: 10000                  # [ms] Global planner timeout
+        max_expand: 1000000                               # [-] Max A* node expansions
 
         # --- Local Planning ---
         horizon: 10.0                                   # [m] Planning horizon
@@ -112,10 +123,10 @@ mighty_node:
         traj_lifetime: 7.0                              # [s] Discard obstacle trajectories older than this
 
         # --- Dynamic Obstacle Heat (soft costs) ---
-        heat_alpha0: 1.0                                # [-] Weight for reachability blob
-        heat_alpha1: 5.0                                # [-] Weight for trajectory tube
-        heat_Hmax: 50.0                                 # [-] Maximum dynamic heat value
-        dyn_base_inflation_m: 0.5                       # [m] Base inflation for dynamic obstacle bboxes
+        heat_alpha0: 0.5                                # [-] Weight for reachability blob
+        heat_alpha1: 2.0                                # [-] Weight for trajectory tube
+        heat_Hmax: 3.0                                  # [-] Maximum dynamic heat value
+        dyn_base_inflation_m: 0.2                       # [m] Base inflation for dynamic obstacle bboxes
         dyn_heat_tube_radius_m: 1.0                     # [m] Heat corridor radius
 
         # --- Static Obstacle Heat (boundary halo) ---
@@ -126,6 +137,7 @@ mighty_node:
         # --- Obstacle Tracking ---
         cluster_tolerance: 1.0                          # [m] Clustering distance for obstacle detection
         prediction_horizon: 3.0                         # [s] How far ahead to predict obstacle motion
+        prediction_mask_distance: 1.0                    # [m] Drop predicted trajs if an agent traj is within this distance
         velocity_threshold: 0.8                         # [m/s] Speed threshold: below = static, above = dynamic
 
         # --- Map Window ---
@@ -144,12 +156,12 @@ mighty_node:
         flight_mode: "terminal_goal"                    # ["terminal_goal"] Only one mode exists
 
         # --- Global Planner Internals ---
-        factor_dgp: 1.0                                # [-] Do not change — resolution = factor_dgp * map_res
+        factor_hgp: 1.0                                # [-] Do not change — resolution = factor_hgp * map_res
         use_free_start: true                            # [-] Free the start voxel if occupied
         free_start_factor: 1.0                          # [-] Radius factor for start freeing
         use_free_goal: false                            # [-] Free the goal voxel if occupied
         free_goal_factor: 2.0                           # [-] Radius factor for goal freeing
-        global_planner_huristic_weight: 2.0             # [-] A* heuristic weight (higher = greedier)
+        global_planner_heuristic_weight: 2.0             # [-] A* heuristic weight (higher = greedier)
         heat_weight: 5.0                                # [-] Overall heat map weight in A* cost
         max_dist_vertexes: 2.0                          # [m] Max distance between path vertices
         w_unknown: 0.0                                  # [-] Cost weight for unknown cells
@@ -165,8 +177,8 @@ mighty_node:
         dynamic_as_occupied_future: false                # [-] Mark obstacle's future cells as hard-occupied
         heat_p: 2                                       # [-] Reachability blob falloff power
         heat_q: 2                                       # [-] Trajectory tube falloff power
-        heat_tau_ratio: 2.0                             # [-] Time decay ratio for heat
-        heat_gamma: 0.1                                 # [m/s] Tube radius growth rate over prediction time
+        heat_tau_ratio: 3.0                             # [-] Time decay ratio for heat
+        heat_gamma: 0.0                                 # [m/s] Tube radius growth rate over prediction time
         heat_num_samples: 15                            # [-] Samples for heat computation
         static_heat_enabled: true                       # [-] Enable static obstacle heat
         static_heat_p: 2                                # [-] Static heat falloff power
@@ -180,6 +192,11 @@ mighty_node:
         obstacle_soft_cost: 50.0                        # [-] Cost per occupied cell step
 
         # --- Path Smoothing ---
+        skip_path_smoothing: false                      # [-] Skip LoS shortcutting, use Laplacian smoothing instead
+        disable_all_smoothing: false                    # [-] Disable all path smoothing (use raw A* output)
+        smooth_iterations: 50                           # [-] Number of heat-aware Laplacian smoothing passes
+        smooth_alpha: 0.3                               # [-] Smoothing relaxation factor (0=none, 1=aggressive)
+        heat_cutoff_ratio: 0.5                          # [-] Cells with heat > ratio * Hmax are impassable (0=disabled)
         los_cells: 3                                    # [cells] Line-of-sight inflation
         min_len: 1.0                                    # [m] Min segment length
         min_turn: 0.0                                   # [deg] Min turn angle
@@ -261,8 +278,20 @@ mighty_node:
         num_perturbation_for_ig: 8                      # [-] Number of perturbations
         r_max_for_ig: 1.0                               # [m] Perturbation radius
 
+        # --- 2D Ground Robot Planning (not used for UAV) ---
+        use_2d_planning: false                          # [-] Enable 2D terrain-aware planning for ground robots
+        robot_height: 0.5                               # [m] Robot height for obstacle column detection
+        obstacle_min_height: 0.3                        # [m] Min column height span to classify as obstacle
+        use_column_any_occupied: true                    # [-] Any occupied voxel in column → 2D occupied
+        column_min_z: 0.15                              # [m] Ignore occupied voxels below this z (filters ground floor)
+        terrain_cost_weight: 1.0                        # [-] Multiplier for terrain gradient cost in A*
+        terrain_cost_mode: "max"                        # ["max", "avg"] Height delta aggregation mode
+        ground_slab_margin: 0.3                         # [m] Z margin for floor/ceiling virtual obstacles in corridors
+
         # --- Trajectory Publishing ---
         trajectory_downsample_points: 500               # [-] Number of points to downsample trajectory to
+        use_trajectory_tracker: false                    # [-] Use FF+FB trajectory tracker instead of pure pursuit
+        mpc_path_spacing: 0.05                          # [m] Spacing between waypoints in MPC path
 
         # --- Debug ---
         global_planner_verbose: false                   # [-] Global planner debug output
@@ -279,3 +308,8 @@ mighty_node:
         use_benchmark: true                             # [-] Enable benchmarking data logging
         file_path: ""                                   # Path to save benchmark CSV
         use_only_global_planner: false                  # [-] Use only global planner for benchmarking
+
+        # --- Frontier-Based Exploration (UAV: OFF) ---
+        # Exploration depends on the 2D occupancy pipeline (occ_2d_topic),
+        # which only runs for ground robots. Leave disabled for UAVs.
+        exploration.enabled: false

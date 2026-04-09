@@ -16,14 +16,28 @@
 #include <hgp/graph_search.hpp>
 #include <hgp/map_util.hpp>
 
-/**
- * @brief Abstract base for planning
+/** @brief Global path planner using A* and JPS on a 3D voxel map.
+ *
+ *  HGPPlanner wraps GraphSearch and provides path planning with line-of-sight
+ *  shortcutting, collinear/corner point removal, and heat-aware Laplacian
+ *  smoothing. Supports both 3D UAV and 2D ground robot modes.
  */
 class HGPPlanner {
  public:
-  /**
-   * @brief Simple constructor
-   * @param verbose enable debug mode
+  /** @brief Construct the planner with algorithm choice and dynamic constraints.
+   *  @param global_planner Name of the search algorithm (e.g., "astar_heat", "sjps").
+   *  @param verbose Enable verbose debug output.
+   *  @param v_max Maximum velocity constraint.
+   *  @param a_max Maximum acceleration constraint.
+   *  @param j_max Maximum jerk constraint.
+   *  @param hgp_timeout_duration_ms Planning timeout in milliseconds.
+   *  @param w_unknown Cost weight for traversing unknown cells.
+   *  @param w_align Alignment penalty weight for start-direction bias.
+   *  @param decay_len_cells E-folding distance for alignment decay in cells.
+   *  @param w_side Side tie-break weight for handedness preference.
+   *  @param los_cells Inflation radius in cells for line-of-sight shortcutting.
+   *  @param min_len Minimum edge length for path simplification.
+   *  @param min_turn Minimum turn angle (degrees) for path simplification.
    */
   HGPPlanner(std::string global_planner, bool verbose, double v_max, double a_max, double j_max,
              int hgp_timeout_duration_ms, double w_unknown, double w_align, double decay_len_cells,
@@ -209,32 +223,77 @@ class HGPPlanner {
   // unknown cell cost weight
   double w_unknown_ = 1.0;
 
+  // ESDF for ground robot A* cost
+  std::shared_ptr<const EsdfGrid2D> esdf_grid_;
+  double esdf_weight_astar_ = 0.0;
+  double esdf_d_safe_astar_ = 0.0;
+
   // LOS post processing
   int los_cells_ = 3;       // number of cells for inflation in LoS
   double min_len_ = 0.5;    // minimum length of edges
   double min_turn_ = 10.0;  // minimum turn angle in degrees
 
  public:
-  // 2D ground robot planning mode
+  /// Whether 2D ground robot planning mode is active.
   bool is_2d_mode_{false};
+
+  /** @brief Enable or disable 2D ground robot planning mode.
+   *  @param enabled True to restrict planning to 2D.
+   */
   void set2DMode(bool enabled) { is_2d_mode_ = enabled; }
 
-  // Disable all path smoothing (use raw A* path)
+  /** @brief Set ESDF grid for distance-based A* cost (ground robot only). */
+  void setEsdfGrid(std::shared_ptr<const EsdfGrid2D> grid, double weight, double d_safe) {
+    esdf_grid_ = grid;
+    esdf_weight_astar_ = weight;
+    esdf_d_safe_astar_ = d_safe;
+  }
+
+  /// Whether all path smoothing is disabled (raw A* path is used directly).
   bool disable_all_smoothing_{false};
+
+  /** @brief Enable or disable all path smoothing.
+   *  @param enabled True to skip all smoothing and return the raw search path.
+   */
   void setDisableAllSmoothing(bool enabled) { disable_all_smoothing_ = enabled; }
 
-  // Skip LoS shortcutting, use heat-aware Laplacian smoothing instead
+  /// Whether line-of-sight shortcutting is skipped in favor of heat-aware smoothing.
   bool skip_path_smoothing_{false};
+
+  /** @brief Enable or disable skipping of LoS-based path shortcutting.
+   *  @param enabled True to skip LoS shortcutting and use Laplacian smoothing instead.
+   */
   void setSkipPathSmoothing(bool enabled) { skip_path_smoothing_ = enabled; }
 
-  // Heat-aware Laplacian smoothing parameters
+  /// Number of iterations for heat-aware Laplacian smoothing.
   int smooth_iterations_{50};
+  /// Blending weight for heat-aware Laplacian smoothing.
   double smooth_alpha_{0.3};
+
+  /** @brief Set parameters for heat-aware Laplacian path smoothing.
+   *  @param iterations Number of smoothing iterations.
+   *  @param alpha Blending weight in [0,1]; higher values produce smoother paths.
+   */
   void setSmoothParams(int iterations, double alpha) {
     smooth_iterations_ = iterations;
     smooth_alpha_ = alpha;
   }
 
-  // Heat-aware Laplacian smoothing
+  /// Maximum distance between consecutive path waypoints for 2D resampling [m].
+  double max_dist_vertexes_2d_{1.0};
+
+  /** @brief Set max distance between waypoints for 2D path resampling. */
+  void setMaxDistVertexes2D(double d) { max_dist_vertexes_2d_ = d; }
+
+  /** @brief Smooth a path using heat-aware Laplacian smoothing.
+   *
+   *  Iteratively moves interior waypoints toward the midpoint of their
+   *  neighbors while biasing away from high-heat (obstacle proximity) regions.
+   *
+   *  @param path Input waypoint path.
+   *  @param iterations Number of smoothing iterations.
+   *  @param alpha Blending weight per iteration.
+   *  @return Smoothed path.
+   */
   vec_Vecf<3> smoothPathHeatAware(const vec_Vecf<3>& path, int iterations, double alpha) const;
 };

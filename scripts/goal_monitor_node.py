@@ -16,6 +16,24 @@ from std_msgs.msg import Header
 import math
 import json
 
+
+def circle_position(agent_index, num_agents, radius, z=1.0):
+    """Compute own and opposite positions on a circle for swap goals.
+
+    Agent i sits at angle = 2*pi*(i-1)/N on a circle of the given radius;
+    its swap target is the diametrically opposite point (angle + pi).
+
+    Returns:
+        (own_x, own_y, z, opp_x, opp_y, z)
+    """
+    angle = 2.0 * math.pi * (agent_index - 1) / num_agents
+    own_x = round(radius * math.cos(angle), 3)
+    own_y = round(radius * math.sin(angle), 3)
+    opp_x = round(radius * math.cos(angle + math.pi), 3)
+    opp_y = round(radius * math.sin(angle + math.pi), 3)
+    return own_x, own_y, z, opp_x, opp_y, z
+
+
 class GoalMonitorNode(Node):
     def __init__(self):
         super().__init__('goal_monitor_node')
@@ -32,6 +50,64 @@ class GoalMonitorNode(Node):
         self.use_hardware = self.get_parameter('use_hardware').value
         self.distance_check_frequency = 1.0  # Frequency to check the distance to the goal
         self.current_goal_index = 0
+
+        # self.declare_parameter('goal_tolerance', 1.0)
+        # self.goal_tolerance = self.get_parameter('goal_tolerance').value
+        # self.declare_parameter('use_hardware', False)
+        # self.use_hardware = self.get_parameter('use_hardware').value
+        # self.declare_parameter('use_ground_robot', False)
+        # self.use_ground_robot = self.get_parameter('use_ground_robot').value
+        # self.declare_parameter('odom_type', 'dlio')  # "dlio" or "mocap"
+        # odom_type = self.get_parameter('odom_type').value
+        # self.declare_parameter('goal_type', 1)  # 1 or 2 (only for mocap mode)
+        # goal_type = self.get_parameter('goal_type').value
+        # self.declare_parameter('num_agents', 10)
+        # num_agents = self.get_parameter('num_agents').value
+        # self.declare_parameter('radius', 10.0)
+        # radius = self.get_parameter('radius').value
+        # self.distance_check_frequency = 1.0
+        # self.current_goal_index = 0
+
+        # z = 0.2 if self.use_ground_robot else 1.0
+
+        # # Hardware ground robot: fixed goal pairs based on odom_type
+        # if self.use_hardware and self.use_ground_robot:
+        #     if odom_type == 'mocap':
+        #         if goal_type == 1:
+        #             self.goal_points = [[3.5, 3.5, z], [-3.5, -3.5, z]]
+        #         else:
+        #             self.goal_points = [[-3.5, 3.5, z], [3.5, -3.5, z]]
+        #         self.get_logger().info(
+        #             f"HW ground robot mocap goals (type {goal_type}): "
+        #             f"{self.goal_points[0]} <-> {self.goal_points[1]}")
+        #     else:  # dlio
+        #         self.goal_points = [[0.0, 0.0, z], [8.0, 0.0, z]]
+        #         self.get_logger().info(
+        #             f"HW ground robot DLIO goals: "
+        #             f"{self.goal_points[0]} <-> {self.goal_points[1]}")
+
+        # # Simulation: circle formation swap
+        # elif self.namespace.startswith('NX'):
+        #     agent_index = int(self.namespace[2:])  # NX01 -> 1
+        #     own_x, own_y, _, opp_x, opp_y, _ = circle_position(agent_index, num_agents, radius, z=z)
+        #     self.goal_points = [[opp_x, opp_y, z], [own_x, own_y, z]]
+        #     self.get_logger().info(
+        #         f"Circle swap goals (N={num_agents}, R={radius}): "
+        #         f"start ({own_x},{own_y}) <-> opposite ({opp_x},{opp_y})")
+
+        # elif self.namespace.startswith('RR'):
+        #     agent_index = int(self.namespace[2:])  # RR01 -> 1
+        #     own_x, own_y, _, opp_x, opp_y, _ = circle_position(agent_index, num_agents, radius, z=z)
+        #     self.goal_points = [[opp_x, opp_y, z], [own_x, own_y, z]]
+        #     self.get_logger().info(
+        #         f"Circle swap goals (N={num_agents}, R={radius}): "
+        #         f"start ({own_x},{own_y}) <-> opposite ({opp_x},{opp_y})")
+
+        # else:
+        #     self.get_logger().error(f"Unknown namespace: {self.namespace}. No goal points defined.")
+        #     self.goal_points = [[0.0, 0.0, 0.0]]
+
+        # No need to repeat — we wrap around forever
 
         # Publishers and Subscribers
         self.state_sub = self.create_subscription(State, 'state', self.state_callback, 10)
@@ -62,19 +138,25 @@ class GoalMonitorNode(Node):
         # Get the current goal point
         goal_x, goal_y, goal_z = tuple(self.goal_points[self.current_goal_index])
 
-        # Compute the Euclidean distance to the current goal
-        distance = math.sqrt(
-            (self.current_position.x - goal_x) ** 2 +
-            (self.current_position.y - goal_y) ** 2 +
-            (self.current_position.z - goal_z) ** 2
-        )
+        # Compute distance to goal (2D for ground robots, 3D for UAVs)
+        if self.use_ground_robot:
+            distance = math.sqrt(
+                (self.current_position.x - goal_x) ** 2 +
+                (self.current_position.y - goal_y) ** 2
+            )
+        else:
+            distance = math.sqrt(
+                (self.current_position.x - goal_x) ** 2 +
+                (self.current_position.y - goal_y) ** 2 +
+                (self.current_position.z - goal_z) ** 2
+            )
 
         self.get_logger().info(f"Distance to goal: {distance:.2f}")
 
-        # Check if the drone has reached the current goal and next goal is not out of bounds
-        if distance < self.goal_tolerance and self.current_goal_index < len(self.goal_points) - 1:
+        # Check if the drone has reached the current goal, then wrap around
+        if distance < self.goal_tolerance:
             self.get_logger().info(f"Goal {self.current_goal_index} reached!")
-            self.current_goal_index = self.current_goal_index + 1
+            self.current_goal_index = (self.current_goal_index + 1) % len(self.goal_points)
 
     def publish_term_goal(self):
         """Publishes the current goal as a PoseStamped message."""

@@ -105,7 +105,9 @@ def _spawn_static_block(context):
     use_sim_time    = _as_bool(context, 'use_sim_time', False)
     urdf_xacro      = LaunchConfiguration('urdf_xacro').perform(context) or 'dyn_obstacle1.urdf.xacro'
 
-    scale_range = [[2.0, 5.0], [5.0, 10.0], [2.0, 4.0]]
+    scale_z_min     = _as(context, 'scale_z_min', float, 2.0)
+    scale_z_max     = _as(context, 'scale_z_max', float, 4.0)
+    scale_range = [[2.0, 5.0], [5.0, 10.0], [scale_z_min, scale_z_max]]
 
     offset_range = [0.0, 3.0] # [offset_min, offset_max]
     slower_range = [slower_min, slower_max]
@@ -279,6 +281,8 @@ def generate_launch_description():
         DeclareLaunchArgument('z_max', default_value='5.0'),
 
         # Trajectory params
+        DeclareLaunchArgument('scale_z_min', default_value='2.0'),
+        DeclareLaunchArgument('scale_z_max', default_value='4.0'),
         DeclareLaunchArgument('slower_min', default_value='4.0'),
         DeclareLaunchArgument('slower_max', default_value='6.0'),
         DeclareLaunchArgument('scale_global', default_value='1.0'),

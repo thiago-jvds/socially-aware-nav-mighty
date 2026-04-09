@@ -1,3 +1,11 @@
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 import subprocess
 
 # The process to exclude (modify as needed for precision)

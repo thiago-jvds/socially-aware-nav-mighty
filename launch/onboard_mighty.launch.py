@@ -1,3 +1,11 @@
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -27,7 +35,7 @@ def generate_launch_description():
     z_arg = DeclareLaunchArgument('z', default_value='2.0', description='Initial z position of the quadrotor')
     yaw_arg = DeclareLaunchArgument('yaw', default_value='180', description='Initial yaw angle of the quadrotor')
     namespace_arg = DeclareLaunchArgument('namespace', default_value='NX01', description='Namespace of the nodes') # namespace
-    data_file_arg = DeclareLaunchArgument('data_file', default_value='/media/kkondo/T7/dynus/tro_paper/global_planner_benchmarking/dgp.csv', description='File name to store data') # file name to store data
+    data_file_arg = DeclareLaunchArgument('data_file', default_value='', description='File name to store data')
     global_planner_arg = DeclareLaunchArgument('global_planner', default_value='sjps', description='Global planner to use') # global planner
     use_benchmark_arg = DeclareLaunchArgument('use_benchmark', default_value='false', description='Flag to indicate whether to use the global planner benchmark') # global planner benchmark
     use_hardware_arg = DeclareLaunchArgument('use_hardware', default_value='false', description='Flag to indicate whether to use hardware or simulation') # flag to indicte if this is hardware or simulation
@@ -36,6 +44,7 @@ def generate_launch_description():
     odom_frame_id_arg = DeclareLaunchArgument('odom_frame_id', default_value='map')
     sim_env_arg = DeclareLaunchArgument('sim_env', default_value='', description='Simulation environment: gazebo or fake_sim (empty = use mighty.yaml default)')
     use_ground_robot_arg = DeclareLaunchArgument('use_ground_robot', default_value='false', description='Enable ground robot mode (spawns p3at, uses cmd_vel control)')
+    use_trajectory_tracker_arg = DeclareLaunchArgument('use_trajectory_tracker', default_value='', description='Override use_trajectory_tracker (empty = use config default)')
     use_onboard_localization_arg = DeclareLaunchArgument('use_onboard_localization', default_value='false', description='Use onboard localization (DLIO) vs Vicon')
     depth_camera_name_arg = DeclareLaunchArgument('depth_camera_name', default_value='d435', description='Depth camera name for topic remapping')
     robot_type_arg = DeclareLaunchArgument('robot_type', default_value='quadrotor', description='Robot type: quadrotor, red_rover, star_robot')
@@ -48,6 +57,20 @@ def generate_launch_description():
         description='Simulated frame offset qz (empty = use config default)')
     sim_frame_offset_qw_arg = DeclareLaunchArgument('sim_frame_offset_qw', default_value='',
         description='Simulated frame offset qw (empty = use config default)')
+    twist_topic_arg = DeclareLaunchArgument('twist_topic', default_value='twist',
+        description='Twist topic for Vicon/mocap state converter (e.g., mocap/twist)')
+
+    # Formation flight (empty string = use config default)
+    use_formation_arg = DeclareLaunchArgument('use_formation', default_value='',
+        description='Override use_formation (empty = use config default)')
+    formation_weight_arg = DeclareLaunchArgument('formation_weight', default_value='',
+        description='Override formation_weight (empty = use config default)')
+    formation_self_offset_arg = DeclareLaunchArgument('formation_self_offset', default_value='',
+        description='Comma-separated per-agent offset "dx,dy,dz" (empty = use config default)')
+    formation_neighbor_ids_arg = DeclareLaunchArgument('formation_neighbor_ids', default_value='',
+        description='Comma-separated neighbor IDs "1,2,3" (empty = use config default)')
+    formation_neighbor_offsets_arg = DeclareLaunchArgument('formation_neighbor_offsets', default_value='',
+        description='Comma-separated flat 3*N offsets "dx1,dy1,dz1,dx2,dy2,dz2,..." (empty = use config default)')
 
     # Need to be the same as simulartor.launch.py
     map_size_x_arg = DeclareLaunchArgument('map_size_x', default_value='20.0')
@@ -120,8 +143,13 @@ def generate_launch_description():
                 hw_params = yaml.safe_load(f)['mighty_node']['ros__parameters']
             parameters.update(hw_params)
 
-        # Check if MPC is enabled (skip pure pursuit)
-        use_mpc = parameters.get('use_mpc', False)
+        # Check if trajectory tracker is enabled — launch arg overrides config
+        tracker_override = LaunchConfiguration('use_trajectory_tracker').perform(context)
+        if tracker_override:
+            use_trajectory_tracker = convert_str_to_bool(tracker_override)
+            parameters['use_trajectory_tracker'] = use_trajectory_tracker
+        else:
+            use_trajectory_tracker = parameters.get('use_trajectory_tracker', False)
 
         # Update parameters for benchmarking
         parameters['file_path'] = data_file
@@ -139,6 +167,30 @@ def generate_launch_description():
             parameters['sim_frame_offset_qz'] = float(sim_frame_offset_qz_str)
         if sim_frame_offset_qw_str:
             parameters['sim_frame_offset_qw'] = float(sim_frame_offset_qw_str)
+
+        # Formation flight overrides (empty launch arg means "use config default")
+        use_formation_str = LaunchConfiguration('use_formation').perform(context)
+        formation_weight_str = LaunchConfiguration('formation_weight').perform(context)
+        formation_self_offset_str = LaunchConfiguration('formation_self_offset').perform(context)
+        formation_neighbor_ids_str = LaunchConfiguration('formation_neighbor_ids').perform(context)
+        formation_neighbor_offsets_str = LaunchConfiguration('formation_neighbor_offsets').perform(context)
+        if use_formation_str:
+            parameters['use_formation'] = convert_str_to_bool(use_formation_str)
+        if formation_weight_str:
+            parameters['formation_weight'] = float(formation_weight_str)
+        if formation_self_offset_str:
+            parameters['formation_self_offset'] = [float(v) for v in formation_self_offset_str.split(',')]
+        if formation_neighbor_ids_str:
+            # rclcpp's IntegerArray parameter requires int64, and empty strings
+            # must become an empty list (not [0]).
+            parameters['formation_neighbor_ids'] = [int(v) for v in formation_neighbor_ids_str.split(',') if v != '']
+        if formation_neighbor_offsets_str:
+            parameters['formation_neighbor_offsets'] = [float(v) for v in formation_neighbor_offsets_str.split(',') if v != '']
+
+        # rclpy can't infer the type of empty lists in dict-form parameters
+        # (raises "got '()' of type 'tuple'"). Drop them so the C++ node falls
+        # back to its declared default.
+        parameters = {k: v for k, v in parameters.items() if not (isinstance(v, list) and len(v) == 0)}
 
         # Lidar topic remapping for hardware vs simulation
         lidar_point_cloud_topic = 'livox/lidar' if use_hardware else 'mid360_PointCloud2'
@@ -187,21 +239,20 @@ def generate_launch_description():
             arguments=['-topic', 'robot_description', '-entity', namespace, '-x', x, '-y', y, '-z', z, '-Y', yaw, '--ros-args', '--log-level', 'error'],
         )
         
-        # Convert pose and twist (from Vicon) to state
+        # Convert pose and twist (from Vicon/mocap) to state
+        twist_topic = LaunchConfiguration('twist_topic').perform(context)
         pose_twist_to_state_node = Node(
             package='mighty',
             executable='convert_vicon_to_state',
             name='convert_vicon_to_state',
             namespace=namespace,
             remappings=[
-                ('world', 'world'),  # Remap incoming PoseStamped topic
-                ('twist', 'twist'),  # Remap incoming TwistStamped topic
-                ('state', 'state')   # Remap outgoing State topic
+                ('world', 'world'),        # Remap incoming PoseStamped topic
+                ('twist', twist_topic),     # Remap incoming TwistStamped topic (e.g., mocap/twist)
+                ('state', 'state')          # Remap outgoing State topic
             ],
             emulate_tty=True,
             output='screen',
-            # prefix='xterm -e gdb -ex run --args', # gdb debugging
-            # arguments=['--ros-args', '--log-level', 'error']
         )
 
         # Pure pursuit controller for ground robot
@@ -213,7 +264,7 @@ def generate_launch_description():
             parameters=[{
                 'L_min': parameters.get('pure_pursuit_L_min', 0.5),
                 'k_v': parameters.get('pure_pursuit_k_v', 0.5),
-                'max_velocity': parameters.get('ground_robot_v_max', 1.0),
+                'max_velocity': parameters.get('ground_robot_v_max', 0.5),
                 'max_angular_velocity': parameters.get('ground_robot_w_max', 3.0),
                 'stopping_radius': parameters.get('pure_pursuit_stopping_radius', 0.1),
                 'adaptive_lookahead_distance': parameters.get('pure_pursuit_adaptive_lookahead_distance', 2.0),
@@ -228,8 +279,28 @@ def generate_launch_description():
             emulate_tty=True,
         )
 
-        # When using ground robot, we don't need to send the exact state to gazebo - the state will be taken care of by wheel controllers
-        # send_state_to_gazebo = False if use_ground_robot else True
+        # Feedforward + feedback trajectory tracker for ground robot (replaces MPC)
+        trajectory_tracker_node = Node(
+            package='mighty',
+            executable='trajectory_tracker',
+            name='trajectory_tracker',
+            namespace=namespace,
+            parameters=[{
+                'control_rate': 50.0,
+                'max_velocity': parameters.get('ground_robot_v_max', 0.5),
+                'max_angular_velocity': 1.5,
+                'stopping_radius': 0.3,
+                'Kp_along': 1.0,
+                'Kp_cross': 2.0,
+                'Kp_yaw': 2.0,
+                'w_smoothing': 0.3,
+                'use_hardware': use_hardware,
+                'map_frame_id': map_frame_id,
+            }],
+            output='screen',
+            emulate_tty=True,
+        )
+
         # Create a fake sim node
         fake_sim_node = Node(
                     package='mighty',
@@ -243,13 +314,11 @@ def generate_launch_description():
                                  "publish_tf": True,
                                  "publish_state": True,
                                  "use_ground_robot": use_ground_robot,
-                                #  "visual_level": parameters['visual_level'],
                                  "publish_odom": publish_odom,
                                  "odom_topic": odom_topic,
                                  "odom_frame_id": odom_frame_id,
                                  "base_frame_id": base_frame_id,
                                  "map_frame_id": map_frame_id}],
-                    # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
                     output='screen',
         )
 
@@ -279,7 +348,6 @@ def generate_launch_description():
                 ('odometry', odometry_topic),
                 ('depth', 'pcl_render_node/depth')
             ],
-            # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
         )
 
         # HW: Odom to state (DLIO remapping)
@@ -295,11 +363,6 @@ def generate_launch_description():
             name='static_tf_map_to_odom', output='screen',
             arguments=['0','0','0','0','0','0','1', f'{namespace}/map', f'{namespace}/odom'])
         
-        # map2map_tf_node = Node(
-        #     package='tf2_ros', executable='static_transform_publisher',
-        #     name='map2map_tf_node', output='screen',
-        #     arguments=['0','0','0','0','0','0','1', f'{namespace}/map', 'map'])
-
         # Return launch description
         nodes_to_start = [mighty_node]
         if use_hardware:
@@ -307,9 +370,10 @@ def generate_launch_description():
                 if robot_type == QUADROTOR:
                     nodes_to_start.append(hw_odom_to_state_node)
                 elif robot_type in [STAR_ROBOT, RED_ROVER]:
-                    # nodes_to_start.extend([hw_odom_to_state_node, pure_pursuit_node, static_tf_node, map2map_tf_node])
                     nodes_to_start.extend([hw_odom_to_state_node, static_tf_node])
-                    if not use_mpc:
+                    if use_trajectory_tracker:
+                        nodes_to_start.append(trajectory_tracker_node)
+                    else:
                         nodes_to_start.append(pure_pursuit_node)
             else:
                 nodes_to_start.append(pose_twist_to_state_node)  # Vicon
@@ -319,7 +383,11 @@ def generate_launch_description():
             nodes_to_start.append(fake_sim_node) if not use_hardware else None
             nodes_to_start.append(robot_state_publisher_node) if parameters['sim_env'] == 'gazebo' else None
             nodes_to_start.append(spawn_entity_node) if parameters['sim_env'] == 'gazebo' else None
-            nodes_to_start.append(pure_pursuit_node) if (use_ground_robot and not use_mpc) else None
+            if use_ground_robot:
+                if use_trajectory_tracker:
+                    nodes_to_start.append(trajectory_tracker_node)
+                else:
+                    nodes_to_start.append(pure_pursuit_node)
             nodes_to_start.append(pcl_render_node) if parameters['sim_env'] == 'fake_sim' else None
 
         return nodes_to_start
@@ -344,6 +412,7 @@ def generate_launch_description():
         odometry_topic_arg,
         sim_env_arg,
         use_ground_robot_arg,
+        use_trajectory_tracker_arg,
         use_onboard_localization_arg,
         depth_camera_name_arg,
         robot_type_arg,
@@ -352,5 +421,11 @@ def generate_launch_description():
         use_frame_alignment_arg,
         sim_frame_offset_qz_arg,
         sim_frame_offset_qw_arg,
+        twist_topic_arg,
+        use_formation_arg,
+        formation_weight_arg,
+        formation_self_offset_arg,
+        formation_neighbor_ids_arg,
+        formation_neighbor_offsets_arg,
         OpaqueFunction(function=launch_setup)
     ])

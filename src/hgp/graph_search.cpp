@@ -42,7 +42,7 @@ GraphSearch::GraphSearch(const int8_t* cMap, const std::shared_ptr<mighty::Voxel
   for (int x = -1; x <= 1; x++) {
     for (int y = -1; y <= 1; y++) {
       const int z_lo = (zDim_ == 1) ? 0 : -1;
-      const int z_hi = (zDim_ == 1) ? 0 :  1;
+      const int z_hi = (zDim_ == 1) ? 0 : 1;
       for (int z = z_lo; z <= z_hi; z++) {
         if (x == 0 && y == 0 && z == 0) continue;
         ns_.push_back(std::vector<int>{x, y, z});
@@ -334,7 +334,7 @@ std::vector<StatePtr> GraphSearch::removeCornerPts(const std::vector<StatePtr>& 
 }
 
 //// RIGHT NOW THE JPS GIVES BACK A VERY SPARSE PATH, SO TO CHECK COLLISION AGAINST DYNAMIC
-///OBSTACLES, WE NEED TO INTERPOLATE THE PATH
+/// OBSTACLES, WE NEED TO INTERPOLATE THE PATH
 void GraphSearch::updateGValues() {
   // first reverse the path
   std::reverse(path_.begin(), path_.end());
@@ -352,7 +352,7 @@ void GraphSearch::updateGValues() {
         map_util_->floatToInt(Vecf<3>(path_float[i](0), path_float[i](1), path_float[i](2)));
     StatePtr temp_ptr = std::make_shared<State>(
         State(coordToId(temp(0), temp(1), temp(2)), temp(0), temp(1), temp(2), 0, 0,
-              0));  // for now dx, dy, dz are 0 (TODO: this could be problematic?)
+              0));  // for now dx, dy, dz are 0
 
     // compute total path length and update g
     if (i > 0) {
@@ -521,6 +521,12 @@ void GraphSearch::setStartAndGoal(const Vecf<3>& start, const Vecf<3>& goal) {
   goal_ = goal;
 }
 
+void GraphSearch::setEsdfGrid(std::shared_ptr<const EsdfGrid2D> grid, double weight, double d_safe) {
+  esdf_grid_ = grid;
+  esdf_weight_astar_ = weight;
+  esdf_d_safe_astar_ = d_safe;
+}
+
 void GraphSearch::setBounds(double max_values[3]) {
   v_max_ = max_values[0];
   v_max_3d_ << max_values[0], max_values[0], max_values[0];
@@ -562,18 +568,22 @@ void GraphSearch::getSucc(const StatePtr& curr, std::vector<int>& succ_ids,
     int new_y = curr->y + d[1];
     int new_z = curr->z + d[2];
 
-    // Check if occupied - skip unless soft-cost mode is enabled
-    if (isOccupied(new_x, new_y, new_z)) {
-      if (!map_util_ || !map_util_->useSoftCostObstacles()) {
-        continue;  // Hard obstacle, skip
+    // Occupancy check
+    if (map_util_ && map_util_->has2DMap() && zDim_ == 1 && esdf_grid_) {
+      // ESDF mode: only check the 2D ESDF-derived map (skip inflated 3D grid)
+      if (map_util_->get2DOccupancy(new_x, new_y) != 0) {
+        continue;
       }
-      // Soft-cost mode: allow traversal but add penalty below
-    }
-
-    // For ground robots: also check 2D occupancy map (catches walls visible only at higher z)
-    if (map_util_ && map_util_->has2DMap() &&
-        map_util_->get2DOccupancy(new_x, new_y) != 0) {
-      continue;  // Occupied in 2D projection
+    } else {
+      // Standard mode: check 3D grid + 2D projection
+      if (isOccupied(new_x, new_y, new_z)) {
+        if (!map_util_ || !map_util_->useSoftCostObstacles()) {
+          continue;
+        }
+      }
+      if (map_util_ && map_util_->has2DMap() && map_util_->get2DOccupancy(new_x, new_y) != 0) {
+        continue;
+      }
     }
 
     // Hard heat cutoff: treat cells with heat > cutoff_ratio * Hmax as impassable
@@ -610,7 +620,7 @@ void GraphSearch::getSucc(const StatePtr& curr, std::vector<int>& succ_ids,
       if (w_heat > 0.0f) {
         // Use 2D heat for ground robots (zDim==1), 3D heat otherwise
         const float h = (zDim_ == 1) ? map_util_->getHeat2D(new_x, new_y)
-                                      : map_util_->getHeat(new_x, new_y, new_z);
+                                     : map_util_->getHeat(new_x, new_y, new_z);
         step_cost += (double)(w_heat * h);
       }
     }
@@ -622,6 +632,29 @@ void GraphSearch::getSucc(const StatePtr& curr, std::vector<int>& succ_ids,
         const float w_heat = map_util_->getHeatWeight();
         const float soft_cost = map_util_->getObstacleSoftCost();
         step_cost += (double)(w_heat * soft_cost);
+      }
+    }
+
+    // -------- ESDF distance cost (ground robot 2D only) --------
+    // Disabled: ESDF avoidance is now handled via heat_2d_ built from buildMap2DFromEsdf().
+    // Keeping this block would double-count obstacle proximity cost.
+    if (false && esdf_grid_ && zDim_ == 1 && esdf_weight_astar_ > 0.0) {
+      // Convert grid coords to world coords for ESDF query
+      double wx, wy;
+      if (map_util_) {
+        Vecf<3> world_pos = map_util_->intToFloat(Veci<3>(new_x, new_y, 0));
+        wx = world_pos(0);
+        wy = world_pos(1);
+      } else {
+        wx = new_x;
+        wy = new_y;
+      }
+      if (esdf_grid_->isInBounds(wx, wy)) {
+        double d = esdf_grid_->queryDistance(wx, wy);
+        if (d < esdf_d_safe_astar_) {
+          double pen = esdf_d_safe_astar_ - d;
+          step_cost += esdf_weight_astar_ * pen * pen;
+        }
       }
     }
 

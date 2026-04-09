@@ -7,22 +7,25 @@
  * -------------------------------------------------------------------------- */
 
 #pragma once
+#include <deque>
+#include <iostream>
+
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_types.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
-#include <deque>
-#include <hgp/data_utils.hpp>
-#include <hgp/termcolor.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
-#include <iostream>
-#include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
+#include <hgp/data_utils.hpp>
+#include <hgp/termcolor.hpp>
+
 #include "mighty/mighty_type.hpp"
+
+#include <rclcpp/rclcpp.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #define RED 1
 #define RED_TRANS 2
@@ -313,10 +316,9 @@ std::ostream& operator<<(std::ostream& out, const std::vector<T>& v) {
  *  @param stamp Timestamp for the markers.
  *  @return MarkerArray with jet-colored markers.
  */
-visualization_msgs::msg::MarkerArray stateVector2ColoredMarkerArray(const std::vector<state>& data,
-                                                                    int type, double max_value,
-                                                                    const rclcpp::Time& stamp,
-                                                                    const std::string& frame_id = "map");
+visualization_msgs::msg::MarkerArray stateVector2ColoredMarkerArray(
+    const std::vector<state>& data, int type, double max_value, const rclcpp::Time& stamp,
+    const std::string& frame_id = "map");
 
 /** @brief Convert a state vector to a jet-colored line strip MarkerArray.
  *  @param data Vector of states to visualize.

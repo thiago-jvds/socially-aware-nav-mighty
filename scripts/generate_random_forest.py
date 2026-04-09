@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+
+# /* ----------------------------------------------------------------------------
+#  * Copyright 2025, Kota Kondo, Aerospace Controls Laboratory
+#  * Massachusetts Institute of Technology
+#  * All Rights Reserved
+#  * Authors: Kota Kondo, et al.
+#  * See LICENSE file for the license information
+#  * -------------------------------------------------------------------------- */
+
 """
 Run Gazebo first:
   ros2 launch gazebo_ros gazebo.launch.py
@@ -184,6 +193,9 @@ class ForestSpawner(Node):
         elif difficulty == "hard":
             self.density = 0.4
             CSV_PATH = "/home/kkondo/data/hard_forest_obstacle_parameters.csv"
+        elif difficulty == "ground_robot":
+            self.density = 0.2
+            CSV_PATH = "/home/kkondo/data/ground_robot_forest_obstacle_parameters.csv"
         elif difficulty == "dynamic":
             self.density = 0.05
             self.dynamic = True
@@ -195,12 +207,19 @@ class ForestSpawner(Node):
             self.density = 0.1
             CSV_PATH = "/home/kkondo/data/medium_forest_obstacle_parameters.csv"
 
-        # Map bounds
-        self.min_x = 3.0
-        self.max_x = 303.0
-        self.min_y = -20.0
-        self.max_y =  20.0
-        self.size_z = 5.0
+        # Map bounds (ground_robot uses a small square area)
+        if difficulty == "ground_robot":
+            self.min_x = -10.0
+            self.max_x =  10.0
+            self.min_y = -10.0
+            self.max_y =  10.0
+            self.size_z = 1.0
+        else:
+            self.min_x = 3.0
+            self.max_x = 303.0
+            self.min_y = -20.0
+            self.max_y =  20.0
+            self.size_z = 5.0
 
         usable_area = (self.max_x - self.min_x) * (self.max_y - self.min_y)
         target_area = self.density * usable_area
@@ -224,10 +243,21 @@ class ForestSpawner(Node):
         self.spawn_ground_plane()
 
         # Footprint/height ranges
-        self.kMinHeight = 1.0 if difficulty in ("easy", "dynamic") else 6.0
-        self.kMaxHeight = 5.0 if difficulty in ("easy", "dynamic") else 6.0
-        self.kMinRadius = 1.0
-        self.kMaxRadius = 1.5
+        if difficulty == "ground_robot":
+            self.kMinHeight = 0.3
+            self.kMaxHeight = 0.8
+            self.kMinRadius = 0.2
+            self.kMaxRadius = 0.5
+        elif difficulty in ("easy", "dynamic"):
+            self.kMinHeight = 1.0
+            self.kMaxHeight = 5.0
+            self.kMinRadius = 1.0
+            self.kMaxRadius = 1.5
+        else:
+            self.kMinHeight = 6.0
+            self.kMaxHeight = 6.0
+            self.kMinRadius = 1.0
+            self.kMaxRadius = 1.5
 
         # Shrink thresholds
         self.shrink_min_radius = self.param_shrink_min_radius if self.param_shrink_min_radius > 0.0 else self.kMinRadius
