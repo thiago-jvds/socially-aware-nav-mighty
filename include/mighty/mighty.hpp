@@ -441,6 +441,11 @@ class MIGHTY {
    */
   std::shared_ptr<mighty::VoxelMapUtil> getMapUtil() const { return hgp_manager_.map_util_; }
 
+  /** @brief Check if the current state requires social avoidance maneuvers.
+   *  @return True if social avoidance is required, false otherwise.
+   */
+  bool checkSocialAvoidance(double current_time);
+
  private:
   // Parameters
   parameters par_;          // Parameters of the planner

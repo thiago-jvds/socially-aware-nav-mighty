@@ -92,30 +92,7 @@ dynus_interfaces::msg::QuinticPWPTraj convertPwp2PwpMsg(const PieceWiseQuinticPo
     coeff_poly5.f = coeff_z_i(5);
     pwp_msg.coeff_z.push_back(coeff_poly5);
   }
-
-  // Function to convert std::vector<float> to Eigen::Vector3d
-  Eigen::Vector3d convertMuMsg2Mu(const std::vector<float> &msg_mu)
-  {
-
-    // Ensure the vector has exactly 3 elements
-    if (msg_mu.size() != 3)
-    {
-      throw std::invalid_argument("msg_mu must have exactly 3 elements.");
-    }
-
-    Eigen::Vector3d mu;
-    mu << msg_mu[0], msg_mu[1], msg_mu[2];
-    return mu;
-  }
-
-  // Function to convert std::vector<float> to Eigen::Matrix<double, 6, 1>
-  Eigen::Matrix<double, 6, 1> convertCoeffMsg2Coeff(const std::vector<float> &msg_coeff)
-  {
-    // Ensure the vector has exactly 6
-    if (msg_coeff.size() != 6)
-    {
-      throw std::invalid_argument("msg_coeff must have exactly 6 elements.");
-    }
+}
 
 PieceWisePol convertPwpMsg2Pwp(const dynus_interfaces::msg::PWPTraj& pwp_msg) {
   PieceWisePol pwp;
@@ -268,6 +245,21 @@ Eigen::Matrix<double, 6, 1> convertCoeffMsg2Coeff(const std::vector<float>& msg_
   Eigen::Matrix<double, 6, 1> coeff;
   coeff << msg_coeff[0], msg_coeff[1], msg_coeff[2], msg_coeff[3], msg_coeff[4], msg_coeff[5];
   return coeff;
+}
+
+// Function to convert std::vector<float> to Eigen::Vector3d
+Eigen::Vector3d convertMuMsg2Mu(const std::vector<float> &msg_mu)
+{
+
+  // Ensure the vector has exactly 3 elements
+  if (msg_mu.size() != 3)
+  {
+    throw std::invalid_argument("msg_mu must have exactly 3 elements.");
+  }
+
+  Eigen::Vector3d mu;
+  mu << msg_mu[0], msg_mu[1], msg_mu[2];
+  return mu;
 }
 
 std_msgs::msg::ColorRGBA getColor(int id) {

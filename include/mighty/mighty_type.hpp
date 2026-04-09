@@ -1031,8 +1031,7 @@ struct dynTraj {
   enum class Mode { Piecewise, Quintic, Analytic } mode{Mode::Analytic};
 
   // --- piecewise quintic branch ---
-  PieceWiseQuinticPol quintic_pwp;
-  PieceWisePol pwp;
+  PieceWiseQuinticPol pwp;
 
   // --- single‐segment quintic branch ---
   double poly_start_time = 0.0;
@@ -1085,7 +1084,7 @@ struct dynTraj {
   /// Switch to a piecewise cubic representation
   inline void setPiecewise(const PieceWiseQuinticPol& poly) {
     mode = Mode::Piecewise;
-    quintic_pwp = poly;
+    pwp = poly;
   }
 
   bool compileAnalytic() {
