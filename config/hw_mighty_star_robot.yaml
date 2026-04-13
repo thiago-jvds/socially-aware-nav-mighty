@@ -30,8 +30,7 @@ mighty_node:
         sim_env: "fake_sim"                             # ["gazebo", "fake_sim"]
         vehicle_type: "ground_robot"                    # ["uav", "ground_robot", "quadruped_robot"]
         use_hardware: true                             # [-] Real hardware vs simulation
-        use_mpc: true                                  # [-] Use MPC controller instead of pure pursuit (publishes nav_msgs/Path on mpc_waypoints)
-        mpc_path_spacing: 0.05                          # [m] Spacing between waypoints published to MPC (lower = smoother)
+        use_trajectory_tracker: true                     # [-] Use FF+FB trajectory tracker instead of pure pursuit
         provide_goal_in_global_frame: false             # [-] Goal given in global frame (true for hardware with Vicon)
         visual_level: 2                                 # [-] Visualization level (0: none, 1: minimal, 2: full)
 
@@ -44,7 +43,7 @@ mighty_node:
         a_max: 2.0                                      # [m/s^2] Max acceleration
         j_max: 2.0                                     # [m/s^3] Max jerk
         w_max: 1.0                                      # [rad/s] Max yaw rate (~4.0 for hardware)
-        drone_bbox: [0.3, 0.3, 0.5]                     # [m] Vehicle bounding box
+        drone_bbox: [0.6, 0.6, 0.5]                     # [m] Vehicle bounding box
 
         # --- UAV-Specific Dynamics (not used for ground robot, but must be declared) ---
         omega_max: 0.10472                              # [rad/s] Max body rate (6 deg/s)
@@ -62,17 +61,17 @@ mighty_node:
         x_max: 1000.0                                   # [m] Map x upper bound
         y_min: -1000.0                                  # [m] Map y lower bound
         y_max: 1000.0                                   # [m] Map y upper bound
-        z_min: -0.4                                     # [m] Min altitude (matches global mapper z_ground)
+        z_min: -0.2                                     # [m] Min altitude (matches global mapper z_ground)
         z_max: 0.5                                       # [m] Max altitude (must include real obstacle heights from lidar)
-        mighty_map_res: 0.1                             # [m] Voxel map resolution (coarser for ground robot)
+        mighty_map_res: 0.15                             # [m] Voxel map resolution (coarser for ground robot)
 
         # --- Goal ---
         force_goal_z: true                              # [-] Force goal to a fixed height (RViz GUI goals have z=0)
-        default_goal_z: -0.2                             # [m] Default goal height (ground level)
+        default_goal_z: -0.1                             # [m] Default goal height (ground level)
 
         # --- Ground Robot Planning ---
-        ground_robot_L_min: 3.0                         # [m] Lookahead distance for point A (planning start point)
-        ground_robot_v_max: 1.8                         # [m/s] Max linear velocity for ground robot
+        ground_robot_L_min: 0.2                         # [m] Lookahead distance for point A (planning start point)
+        ground_robot_v_max: 1.5                         # [m/s] Max linear velocity for ground robot
         ground_robot_w_max: 0.5                         # [rad/s] Max angular velocity for smooth tracking
 
         # --- 2D Ground Robot Planning ---
@@ -83,10 +82,10 @@ mighty_node:
         column_min_z: -0.3                              # [m] Ignore occupied voxels below this z (set to z_min)
         terrain_cost_weight: 1.0                        # [-] Multiplier for terrain gradient cost in A*
         terrain_cost_mode: "max"                        # ["max", "avg"] Height delta aggregation mode
-        ground_slab_margin: 0.3                         # [m] Z margin for floor/ceiling virtual obstacles in corridors
+        ground_slab_margin: 0.4                         # [m] Z margin for floor/ceiling virtual obstacles in corridors
 
         # --- Pure Pursuit Controller ---
-        pure_pursuit_L_min: 4.0                         # [m] Min lookahead distance (higher = smoother)
+        pure_pursuit_L_min: 0.2                         # [m] Min lookahead distance (higher = smoother)
         pure_pursuit_k_v: 0.1                           # [s] Velocity-dependent lookahead factor (L = L_min + k_v * v)
         pure_pursuit_stopping_radius: 0.1               # [m] Stop when within this distance of goal
         pure_pursuit_adaptive_lookahead_distance: 2.0   # [m] Start reducing lookahead within this distance of goal
@@ -131,7 +130,7 @@ mighty_node:
         # --- L-BFGS Optimization Weights ---
         dynamic_weight: 0.0                            # [-] Dynamic obstacle avoidance weight
         time_weight: 1e+2                               # [-] Time cost weight
-        pos_anchor_weight: 1e+4                         # [-] Position anchor weight (penalizes deviation from DGP waypoints)
+        # pos_anchor_weight: 1e+4                         # [-] Position anchor weight (penalizes deviation from DGP waypoints)
         stat_weight: 0.0                               # [-] Static obstacle weight (pushes trajectory away from obstacles)
         jerk_weight: 1e+4                               # [-] Jerk smoothness weight
         dyn_constr_vel_weight: 1e+3                     # [-] Velocity constraint violation weight
@@ -145,9 +144,9 @@ mighty_node:
         traj_lifetime: 7.0                              # [s] Discard obstacle trajectories older than this
 
         # --- Static Obstacle Heat (boundary halo) ---
-        static_heat_alpha: 5.0                          # [-] Peak heat at obstacle boundary
+        static_heat_alpha: 1.0                          # [-] Peak heat at obstacle boundary
         static_heat_Hmax: 10.0                          # [-] Maximum static heat value
-        static_heat_rmax_m: 0.5                         # [m] Maximum halo radius
+        static_heat_rmax_m: 1.0                         # [m] Maximum halo radius
 
         # --- Obstacle Tracking ---
         cluster_tolerance: 1.0                          # [m] Clustering distance for obstacle detection
@@ -175,9 +174,9 @@ mighty_node:
         free_start_factor: 1.0                          # [-] Radius factor for start freeing
         use_free_goal: false                            # [-] Free the goal voxel if occupied
         free_goal_factor: 2.0                           # [-] Radius factor for goal freeing
-        global_planner_huristic_weight: 1.0             # [-] A* heuristic weight (higher = greedier)
-        heat_weight: 2.0                                # [-] Overall heat map weight in A* cost
-        max_dist_vertexes: 1.0                          # [m] Max distance between path vertices
+        global_planner_huristic_weight: 3.0             # [-] A* heuristic weight (higher = greedier)
+        heat_weight: 20.0                                # [-] Overall heat map weight in A* cost
+        max_dist_vertexes: 0.5                         # [m] Max distance between path vertices
         w_unknown: 30.0                                  # [-] Cost weight for unknown cells
         w_align: 0.0                                    # [-] Cost weight for alignment with initial velocity
         decay_len_cells: 100.0                          # [-] Decay length for alignment cost
@@ -207,12 +206,16 @@ mighty_node:
         # --- Path Smoothing ---
         heat_cutoff_ratio: 0.0                          # [-] Cells with heat > ratio * Hmax are impassable (0=disabled)
         disable_all_smoothing: false                    # [-] Disable all smoothing (use raw A* path)
-        skip_path_smoothing: true                       # [-] Use heat-aware Laplacian smoothing instead of corner removal
+        skip_path_smoothing: false                       # [-] Use heat-aware Laplacian smoothing instead of corner removal
         smooth_iterations: 50                           # [-] Number of heat-aware smoothing passes
-        smooth_alpha: 0.6                               # [-] Smoothing relaxation factor (0=none, 1=aggressive)
+        smooth_alpha: 0.3                               # [-] Smoothing relaxation factor (0=none, 1=aggressive)
         los_cells: 3                                    # [cells] Line-of-sight inflation
         min_len: 0.0                                    # [m] Min segment length
         min_turn: 0.0                                   # [deg] Min turn angle
+
+        # --- Soft-Cost Obstacles ---
+        use_soft_cost_obstacles: false                   # [-] Enable soft-cost traversal mode
+        obstacle_soft_cost: 50.0                        # [-] Cost per occupied cell step
 
         # --- Convex Decomposition Internals ---
         min_dist_from_agent_to_traj: 10.0               # [m] Min distance from agent to trajectory
@@ -221,7 +224,9 @@ mighty_node:
         sfc_use_unknown_as_obstacle: false              # [-] Treat unknown cells as obstacles in SFC generation
 
         # --- L-BFGS Solver Internals ---
+        spline_degree: 3                                # [-] Hermite spline degree (3=cubic, 5=quintic)
         dc: 0.01                                        # [s] Interpolation timestep
+        pos_anchor_weight: 1e+2                         # [-] Position anchor weight (penalizes deviation from HGP waypoints)
         dyn_constr_bodyrate_weight: 0.0                 # [-] Body rate constraint weight
         dyn_constr_tilt_weight: 0.0                     # [-] Tilt constraint weight
         dyn_constr_thrust_weight: 0.0                   # [-] Thrust constraint weight
@@ -237,6 +242,12 @@ mighty_node:
         max_iterations: 0                               # [-] Max L-BFGS iterations (0 = unlimited)
         g_epsilon: 1.0e-5                               # [-] Gradient norm convergence threshold
         delta: 1.0e-6                                   # [-] Function improvement convergence threshold
+
+        # --- ESDF-Based Obstacle Avoidance (ground robot only) ---
+        use_esdf_cost: true                             # [-] Enable ESDF distance cost in L-BFGS
+        esdf_weight: 1.0e+5                             # [-] ESDF cost weight in objective
+        esdf_d_safe: 0.7                                # [m] Safety distance threshold
+        esdf_truncation_distance: 3                    # [voxels] Must match mapper's distance_grid_2d.truncation_distance
 
         # --- Dynamic Obstacle Internals ---
         dynamic_obstacle_base_inflation: 0.5            # [m] Inflation for dynamic obstacles
@@ -257,9 +268,9 @@ mighty_node:
         # --- Map Internals ---
         map_buffer: 0.0                                 # [m] Buffer for goal & A point
         center_shift_factor: 0.5                        # [-] Map center shift factor
-        min_wdx: 10.0                                   # [m] Min map window width
-        min_wdy: 10.0                                   # [m] Min map window depth
-        min_wdz: 0.3                                    # [m] Min map window height (tall enough to capture wall voxels)
+        min_wdx: 15.0                                   # [m] Min map window width
+        min_wdy: 15.0                                   # [m] Min map window depth
+        min_wdz: 0.15                                    # [m] Min map window height (tall enough to capture wall voxels)
 
         # --- Communication Delay ---
         use_comm_delay_inflation: true                  # [-] Enable communication delay inflation

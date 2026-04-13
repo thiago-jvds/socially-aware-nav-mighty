@@ -11,7 +11,6 @@ Panels:
         - /ST011/Planning1/ST01 DGP path1
         - /ST011/Planning1/ST01 DGP path1/Topic1
         - /ST011/Planning1/ST01 DGP Free Path1
-        - /ST011/Planning1/ST01 DGP Free Path1/Status1
         - /ST011/Planning1/ST01 DGP Free Path1/Topic1
         - /ST011/Mapping1
         - /PointCloud21/Topic1
@@ -76,8 +75,6 @@ Visualization Manager:
               Value: true
             ST01/odom:
               Value: true
-            map:
-              Value: true
           Marker Scale: 5
           Name: TF
           Show Arrows: false
@@ -91,8 +88,6 @@ Visualization Manager:
                     {}
                   ST01/livox_frame:
                     {}
-              map:
-                {}
           Update Interval: 0
           Value: true
         - Class: rviz_default_plugins/Marker
@@ -125,7 +120,7 @@ Visualization Manager:
                 Durability Policy: Volatile
                 History Policy: Keep Last
                 Reliability Policy: System Default
-                Value: /ST01/dgp_path_marker
+                Value: /ST01/hgp_path_marker
               Value: true
             - Class: rviz_default_plugins/MarkerArray
               Enabled: true
@@ -202,14 +197,118 @@ Visualization Manager:
               Enabled: true
               Name: ST01 Other Agent Traj (transformed)
               Namespaces:
-                other_agent_traj_24: true
-                other_agent_traj_25: true
-                other_agent_traj_26: true
-                other_agent_traj_28: true
-                other_agent_traj_30: true
-                other_agent_traj_31: true
-                other_agent_traj_32: true
-                other_agent_traj_34: true
+                other_agent_traj_100: true
+                other_agent_traj_101: true
+                other_agent_traj_104: true
+                other_agent_traj_105: true
+                other_agent_traj_106: true
+                other_agent_traj_108: true
+                other_agent_traj_114: true
+                other_agent_traj_115: true
+                other_agent_traj_116: true
+                other_agent_traj_117: true
+                other_agent_traj_119: true
+                other_agent_traj_120: true
+                other_agent_traj_122: true
+                other_agent_traj_125: true
+                other_agent_traj_126: true
+                other_agent_traj_127: true
+                other_agent_traj_128: true
+                other_agent_traj_130: true
+                other_agent_traj_131: true
+                other_agent_traj_132: true
+                other_agent_traj_133: true
+                other_agent_traj_135: true
+                other_agent_traj_136: true
+                other_agent_traj_140: true
+                other_agent_traj_142: true
+                other_agent_traj_143: true
+                other_agent_traj_144: true
+                other_agent_traj_145: true
+                other_agent_traj_146: true
+                other_agent_traj_147: true
+                other_agent_traj_148: true
+                other_agent_traj_150: true
+                other_agent_traj_151: true
+                other_agent_traj_155: true
+                other_agent_traj_156: true
+                other_agent_traj_157: true
+                other_agent_traj_158: true
+                other_agent_traj_160: true
+                other_agent_traj_161: true
+                other_agent_traj_162: true
+                other_agent_traj_167: true
+                other_agent_traj_168: true
+                other_agent_traj_175: true
+                other_agent_traj_176: true
+                other_agent_traj_178: true
+                other_agent_traj_181: true
+                other_agent_traj_182: true
+                other_agent_traj_187: true
+                other_agent_traj_188: true
+                other_agent_traj_189: true
+                other_agent_traj_190: true
+                other_agent_traj_191: true
+                other_agent_traj_193: true
+                other_agent_traj_196: true
+                other_agent_traj_198: true
+                other_agent_traj_199: true
+                other_agent_traj_201: true
+                other_agent_traj_205: true
+                other_agent_traj_207: true
+                other_agent_traj_208: true
+                other_agent_traj_209: true
+                other_agent_traj_210: true
+                other_agent_traj_211: true
+                other_agent_traj_212: true
+                other_agent_traj_214: true
+                other_agent_traj_215: true
+                other_agent_traj_216: true
+                other_agent_traj_217: true
+                other_agent_traj_218: true
+                other_agent_traj_219: true
+                other_agent_traj_220: true
+                other_agent_traj_221: true
+                other_agent_traj_222: true
+                other_agent_traj_224: true
+                other_agent_traj_226: true
+                other_agent_traj_227: true
+                other_agent_traj_228: true
+                other_agent_traj_230: true
+                other_agent_traj_52: true
+                other_agent_traj_53: true
+                other_agent_traj_54: true
+                other_agent_traj_55: true
+                other_agent_traj_56: true
+                other_agent_traj_57: true
+                other_agent_traj_59: true
+                other_agent_traj_60: true
+                other_agent_traj_62: true
+                other_agent_traj_63: true
+                other_agent_traj_65: true
+                other_agent_traj_66: true
+                other_agent_traj_68: true
+                other_agent_traj_69: true
+                other_agent_traj_70: true
+                other_agent_traj_71: true
+                other_agent_traj_72: true
+                other_agent_traj_73: true
+                other_agent_traj_74: true
+                other_agent_traj_75: true
+                other_agent_traj_76: true
+                other_agent_traj_77: true
+                other_agent_traj_78: true
+                other_agent_traj_80: true
+                other_agent_traj_83: true
+                other_agent_traj_84: true
+                other_agent_traj_86: true
+                other_agent_traj_87: true
+                other_agent_traj_88: true
+                other_agent_traj_89: true
+                other_agent_traj_90: true
+                other_agent_traj_92: true
+                other_agent_traj_93: true
+                other_agent_traj_95: true
               Topic:
                 Depth: 5
                 Durability Policy: Volatile
@@ -762,9 +861,9 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 1
+      Max Intensity: -999999
       Min Color: 0; 0; 0
-      Min Intensity: 1
+      Min Intensity: 999999
       Name: PointCloud2
       Position Transformer: XYZ
       Selectable: true
@@ -827,6 +926,27 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: true
+      Name: Map
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /ST01/esdf_2d_topic
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /ST01/esdf_2d_topic_updates
+      Use Timestamp: false
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -873,7 +993,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 12.549367904663086
+      Distance: 20.94635772705078
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -888,10 +1008,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.3547977209091187
+      Pitch: 0.7597963213920593
       Target Frame: ST01/map
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.436098575592041
+      Yaw: 3.642916679382324
     Saved: ~
 Window Geometry:
   Displays:

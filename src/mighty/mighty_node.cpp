@@ -273,15 +273,16 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
 
   // ESDF subscription (ground robot only)
   if (par_.use_esdf_cost && par_.vehicle_type == "ground_robot") {
+    auto sensor_qos = rclcpp::SensorDataQoS();
     sub_esdf_2d_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "esdf_2d_topic", 10,
+        "esdf_2d_topic", sensor_qos,
         std::bind(&MIGHTY_NODE::esdfCallback, this, std::placeholders::_1), options_map);
     RCLCPP_INFO(this->get_logger(), "ESDF: Subscribed to esdf_2d_topic (d_safe=%.1f m, weight=%.0f)",
                 par_.esdf_d_safe, par_.esdf_weight);
 
     // Also subscribe to binary 2D occupancy for A* planning
     sub_occ_2d_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "occ_2d_topic", 10,
+        "occ_2d_topic", sensor_qos,
         std::bind(&MIGHTY_NODE::occ2DCallback, this, std::placeholders::_1), options_map);
     RCLCPP_INFO(this->get_logger(), "Occ2D: Subscribed to occ_2d_topic for ground robot A* planning");
 
@@ -2887,6 +2888,25 @@ void MIGHTY_NODE::unknownMapCallback(const sensor_msgs::msg::PointCloud2::ConstP
 }
 
 void MIGHTY_NODE::esdfCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+  // static int dbg_count = 0;
+  // if ((dbg_count++ % 20) == 0) {
+  //   size_t count_100 = 0;
+  //   size_t count_0 = 0;
+  //   size_t count_mid = 0;
+  //   for (const auto v : msg->data) {
+  //     if (v >= 100) {
+  //       count_100++;
+  //     } else if (v <= 0) {
+  //       count_0++;
+  //     } else {
+  //       count_mid++;
+  //     }
+  //   }
+  //   printf("[ESDF_CB] stamp=%.3f size=%ux%u count100=%zu count0=%zu countMid=%zu \n",
+  //               rclcpp::Time(msg->header.stamp).seconds(), msg->info.width, msg->info.height,
+  //               count_100, count_0, count_mid);
+  // }
+
   esdf_grid_ = EsdfGrid2D::fromOccupancyGrid(*msg, par_.esdf_truncation_distance);
 }
 

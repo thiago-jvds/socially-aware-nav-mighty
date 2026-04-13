@@ -92,6 +92,8 @@ dynus_interfaces::msg::QuinticPWPTraj convertPwp2PwpMsg(const PieceWiseQuinticPo
     coeff_poly5.f = coeff_z_i(5);
     pwp_msg.coeff_z.push_back(coeff_poly5);
   }
+
+  return pwp_msg;
 }
 
 PieceWisePol convertPwpMsg2Pwp(const dynus_interfaces::msg::PWPTraj& pwp_msg) {
