@@ -249,6 +249,12 @@ class HGPManager {
    */
   void findClosestFreePoint(const Vec3f& point, Vec3f& closest_free_point);
 
+  /** @brief Find the closest non-occupied voxel (free OR unknown) to a given point.
+   *  @param point Query position in world coordinates.
+   *  @param closest_non_occupied_point Output position of the nearest free or unknown voxel.
+   */
+  void findClosestNonOccupiedPoint(const Vec3f& point, Vec3f& closest_non_occupied_point);
+
   /** @brief Count the number of unknown cells in the current map.
    *  @return Number of unknown cells.
    */

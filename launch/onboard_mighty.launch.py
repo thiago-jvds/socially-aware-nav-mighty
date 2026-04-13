@@ -271,6 +271,7 @@ def generate_launch_description():
                 'turn_in_place_threshold_deg': parameters.get('pure_pursuit_turn_in_place_threshold_deg', 60.0),
                 'slow_down_threshold_deg': parameters.get('pure_pursuit_slow_down_threshold_deg', 30.0),
                 'w_smoothing_alpha': parameters.get('pure_pursuit_w_smoothing_alpha', 0.3),
+                'max_linear_accel': parameters.get('pure_pursuit_max_linear_accel', 1.0),
                 'use_hardware': use_hardware,
                 'map_frame_id': map_frame_id,
                 'control_rate': 50.0,
@@ -318,7 +319,8 @@ def generate_launch_description():
                                  "odom_topic": odom_topic,
                                  "odom_frame_id": odom_frame_id,
                                  "base_frame_id": base_frame_id,
-                                 "map_frame_id": map_frame_id}],
+                                 "map_frame_id": map_frame_id,
+                                 "visual_level": 1}],
                     output='screen',
         )
 
@@ -341,6 +343,8 @@ def generate_launch_description():
                 {'map/x_size': map_size_x},
                 {'map/y_size': map_size_y},
                 {'map/z_size': map_size_z},
+                {'use_sphere_sensing': bool(parameters.get('use_sphere_sensing', False))},
+                {'sphere_sensing_radius': float(parameters.get('sphere_sensing_radius', 5.0))},
                 camera_file
             ],
             remappings=[

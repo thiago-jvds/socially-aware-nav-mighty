@@ -861,6 +861,61 @@ class MapUtil {
   }
 
   /**
+   * @brief  Find a non-occupied point (free or unknown) in the map closest to
+   *         the given point. Mirrors findClosestFreePoint but the predicate is
+   *         "not occupied" instead of "free", so unknown cells are accepted.
+   * @param  point : The given query position in world coordinates
+   * @param  closest_non_occupied_point : Output position of the nearest non-occupied voxel
+   */
+  void findClosestNonOccupiedPoint(const Vec3f& point, Vec3f& closest_non_occupied_point) {
+    closest_non_occupied_point = point;
+
+    if (!map_initialized_) {
+      std::cout << "Map is not initialized" << std::endl;
+      return;
+    }
+
+    Veci<3> point_int = floatToInt(point);
+    int index = getIndex(point_int);
+
+    if (index >= 0 && index < total_size_) {
+      // Already non-occupied (free or unknown): nothing to do.
+      if (map_[index] <= val_free_) {
+        closest_non_occupied_point = point;
+        return;
+      }
+
+      std::vector<int> neighbor_indices;
+
+      // Expanding-radius search until a non-occupied cell is found.
+      for (float radius = 1.0; radius < 5.0; radius += 0.5) {
+        neighbor_indices.clear();
+        getNeighborIndices(point_int, neighbor_indices, radius);
+
+        float min_dist = std::numeric_limits<float>::max();
+        for (int neighbor_index : neighbor_indices) {
+          if (neighbor_index >= 0 && neighbor_index < total_size_) {
+            // val_unknown_ = -1, val_free_ = 0, occupied > 0 → "<= val_free_" is non-occupied.
+            if (map_[neighbor_index] <= val_free_) {
+              Veci<3> neighbor_int = indexToVeci3(neighbor_index);
+              Vec3f neighbor = intToFloat(neighbor_int);
+              float dist = (neighbor - point).norm();
+              if (dist < min_dist) {
+                min_dist = dist;
+                closest_non_occupied_point = neighbor;
+              }
+            }
+          }
+        }
+
+        if (min_dist < std::numeric_limits<float>::max()) {
+          return;
+        }
+      }
+    }
+  }
+
+  /**
    * @brief Get indices of the neighbors of a point given the radius
    * @param Veci<3> point_int : The given point
    * @param std::vector<int>& neighbor_indices : The indices of the neighbors

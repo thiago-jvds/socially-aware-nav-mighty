@@ -59,3 +59,10 @@ fi
 
 echo "[Docker] Running: python3 src/mighty/scripts/run_sim.py $ARGS"
 python3 src/mighty/scripts/run_sim.py $ARGS
+
+# Keep the container alive so Xpra/tmux sessions remain accessible
+if [ "${USE_XPRA}" = "true" ]; then
+    echo "[Docker] Simulation launched. Container will stay alive for Xpra."
+    echo "[Docker] Press Ctrl+C to stop."
+    tail -f /dev/null
+fi

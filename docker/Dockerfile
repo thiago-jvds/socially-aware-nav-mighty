@@ -3,161 +3,122 @@ FROM ros:humble
 LABEL Maintainer="Kota Kondo <kkondo@mit.edu>" \
       Description="Ubuntu 22.04, ROS2 humble for MIGHTY"
 
-# Set environment variables
-##########################################
 ENV ROS_DISTRO=humble
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Usuals
-##########################################
-RUN rm -rf /var/lib/apt/lists/*
-RUN apt update
-RUN apt upgrade -y
-RUN apt-get update
-RUN apt-get upgrade -y
-RUN apt-get install -q -y --no-install-recommends git tmux vim wget tmuxp make gdb
+# System packages
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -q -y --no-install-recommends \
+        git tmux vim wget tmuxp make gdb && \
+    rm -rf /var/lib/apt/lists/*
 
-# Making directories and setting up the environment
-##########################################
-WORKDIR /home/kkondo
-RUN mkdir code
+# ROS 2 dependencies
+RUN apt-get update && apt-get install -y \
+        ros-${ROS_DISTRO}-gazebo-* \
+        ros-${ROS_DISTRO}-pcl-conversions \
+        ros-${ROS_DISTRO}-example-interfaces \
+        ros-${ROS_DISTRO}-pcl-ros \
+        ros-${ROS_DISTRO}-rviz2 \
+        ros-${ROS_DISTRO}-rviz-common \
+        ros-${ROS_DISTRO}-rqt-gui \
+        ros-${ROS_DISTRO}-rqt-gui-py \
+        ros-${ROS_DISTRO}-tf2-tools \
+        ros-${ROS_DISTRO}-tf-transformations \
+        ros-${ROS_DISTRO}-desktop \
+        ros-${ROS_DISTRO}-turtlesim \
+        ros-dev-tools \
+        python3-vcstool \
+        libpcl-dev build-essential nlohmann-json3-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-##########################################
-RUN apt-get install -y  ros-${ROS_DISTRO}-gazebo-* \
-                        ros-${ROS_DISTRO}-pcl-conversions \
-                        ros-${ROS_DISTRO}-example-interfaces \
-                        ros-${ROS_DISTRO}-pcl-ros \
-                        ros-${ROS_DISTRO}-rviz2 \
-                        ros-${ROS_DISTRO}-rqt-gui \
-                        ros-${ROS_DISTRO}-rqt-gui-py \
-                        ros-${ROS_DISTRO}-tf2-tools \
-                        ros-${ROS_DISTRO}-tf-transformations
+# Workspace layout (paths must match mighty.sh / Makefile DEV_MOUNTS)
+ENV CODE_DIR=/home/kkondo/code
+ENV MIGHTY_WS=${CODE_DIR}/mighty_ws
+ENV DECOMP_WS=${CODE_DIR}/decomp_ws
+ENV LIVOX_WS=${CODE_DIR}/livox_ws
+ENV LIVOX_SDK_DIR=${CODE_DIR}/Livox-SDK2
 
-RUN apt install -y  ros-${ROS_DISTRO}-desktop \
-                        ros-dev-tools \
-                        ros-${ROS_DISTRO}-turtlesim \
-                        ros-${ROS_DISTRO}-rqt* \
-                        ros-${ROS_DISTRO}-rviz2 \
-                        ros-${ROS_DISTRO}-rviz-common \ 
-                        libpcl-dev \
-                        build-essential \
-                        nlohmann-json3-dev
-
-# Install MIGHTY and dependencies
-##########################################
-# Version control: commits from mighty.repos
-ARG MIGHTY_VERSION=d1fedda5c0591ed29456f77cdde8edea8010cd63
-ARG ACL_MAPPING_VERSION=c3b27af1549ef1ab549acbe1143bf810a900da95
-ARG DYNUS_INTERFACES_VERSION=c43bcec6d4b67c6f8a8baabb1b2f8c1ba8b919d1
-ARG GAZEBO_ROS_PKGS_VERSION=ed1f7b886971d7bf898e6e0f59c622df929c0521
-ARG LIVOX_LASER_SIM_VERSION=246040d802ec2d7374f38ffd07e5e7fc49e297fb
-ARG REALSENSE_GAZEBO_VERSION=8c357e69da2160f54328db70915bd9b28eb975bf
-ARG UAV_SIMULATOR_VERSION=b196208d3cbf0269b8e80220f7cc1cc992b6c7f8
-ARG DECOMP_ROS2_VERSION=a2bc42ed46bf934323994706f17af8a3883860ea
-ARG LIVOX_ROS_DRIVER2_VERSION=274aad204b5dfce15c648e88dfd375fa5d7b3026
-ARG LIVOX_SDK2_VERSION=6a940156dd7151c3ab6a52442d86bc83613bd11b
-
-RUN mkdir -p /home/kkondo/code/mighty_ws/src
-WORKDIR /home/kkondo/code/mighty_ws/src
-# dummy arg to invalidate cache and build from here
+# Clone MIGHTY at a pinned release tag (override with --build-arg MIGHTY_VERSION=<tag>).
+# All other dep versions live in mighty.repos — single source of truth.
+RUN mkdir -p ${MIGHTY_WS}/src
+WORKDIR ${MIGHTY_WS}/src
 ARG DUMMY=unknown
-RUN DUMMY=${DUMMY} git clone https://github.com/mit-acl/mighty.git
-WORKDIR /home/kkondo/code/mighty_ws/src/mighty
-RUN git checkout ${MIGHTY_VERSION}
-WORKDIR /home/kkondo/code/mighty_ws/src
-RUN git clone https://github.com/kotakondo/dynus_interfaces.git && \
-    cd dynus_interfaces && git checkout ${DYNUS_INTERFACES_VERSION}
-RUN git clone https://github.com/kotakondo/realsense_gazebo_plugin.git && \
-    cd realsense_gazebo_plugin && git checkout ${REALSENSE_GAZEBO_VERSION}
-RUN git clone https://github.com/kotakondo/livox_laser_simulation_ros2.git && \
-    cd livox_laser_simulation_ros2 && git checkout ${LIVOX_LASER_SIM_VERSION}
-RUN git clone https://github.com/kotakondo/gazebo_ros_pkgs.git && \
-    cd gazebo_ros_pkgs && git checkout ${GAZEBO_ROS_PKGS_VERSION}
-RUN git clone https://gitlab.com/mit-acl/lab/acl-mapping.git && \
-    cd acl-mapping && git checkout ${ACL_MAPPING_VERSION}
-RUN git clone https://github.com/kotakondo/uav_simulator.git && \
-    cd uav_simulator && git checkout ${UAV_SIMULATOR_VERSION}
-RUN mkdir -p /home/kkondo/code/decomp_ws/src
-WORKDIR /home/kkondo/code/decomp_ws/src
-RUN git clone https://github.com/kotakondo/DecompROS2.git && \
-    cd DecompROS2 && git checkout ${DECOMP_ROS2_VERSION}
-RUN mkdir -p /home/kkondo/code/livox_ws/src
-WORKDIR /home/kkondo/code/livox_ws/src
-RUN git clone https://github.com/kotakondo/livox_ros_driver2.git && \
-    cd livox_ros_driver2 && git checkout ${LIVOX_ROS_DRIVER2_VERSION}
-WORKDIR /home/kkondo/code
-RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git && \
-    cd Livox-SDK2 && git checkout ${LIVOX_SDK2_VERSION}
+ARG MIGHTY_VERSION=v0.0.5
+RUN DUMMY=${DUMMY} git clone --depth 1 --branch ${MIGHTY_VERSION} https://github.com/mit-acl/mighty.git
 
-# Build the workspace
-##########################################
-# For Mac (amd64 emulation), limit parallelism to avoid OOM:
-#   docker build --build-arg JOBS=4 ...
+# Import every dependency (pinned in mighty.repos)
+WORKDIR ${MIGHTY_WS}
+RUN vcs import src < src/mighty/mighty.repos
+
+# Move special-build deps out of mighty_ws into their own trees
+RUN mkdir -p ${DECOMP_WS}/src ${LIVOX_WS}/src && \
+    mv ${MIGHTY_WS}/src/DecompROS2       ${DECOMP_WS}/src/ && \
+    mv ${MIGHTY_WS}/src/livox_ros_driver2 ${LIVOX_WS}/src/ && \
+    mv ${MIGHTY_WS}/src/Livox-SDK2        ${LIVOX_SDK_DIR}
+
+SHELL ["/bin/bash", "-c"]
+
+# Build parallelism — for amd64 emulation on Mac, limit with: --build-arg JOBS=4
 ARG JOBS=""
 
-### for decomp
-WORKDIR /home/kkondo/code/decomp_ws
-RUN . /opt/ros/humble/setup.sh && colcon build --packages-select decomp_util
-RUN . /home/kkondo/code/decomp_ws/install/setup.sh && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+# Build DecompROS2 (decomp_util first, then the rest)
+WORKDIR ${DECOMP_WS}
+RUN source /opt/ros/humble/setup.bash && \
+    colcon build --packages-select decomp_util \
+                 ${JOBS:+--parallel-workers $JOBS} \
+                 --cmake-args -DCMAKE_BUILD_TYPE=Release
+RUN source /opt/ros/humble/setup.bash && \
+    source ${DECOMP_WS}/install/setup.bash && \
+    colcon build ${JOBS:+--parallel-workers $JOBS} \
+                 --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-### for Livox-SDK2
-WORKDIR /home/kkondo/code/Livox-SDK2
-RUN mkdir build
-WORKDIR /home/kkondo/code/Livox-SDK2/build
-RUN cmake .. && make -j${JOBS} && sudo make install
+# Build Livox-SDK2 (cmake install to /usr/local)
+WORKDIR ${LIVOX_SDK_DIR}
+RUN mkdir -p build && cd build && \
+    cmake .. && make -j${JOBS:-$(nproc)} && make install
 
-### for livox_ros_driver2
-WORKDIR /home/kkondo/code/livox_ws/src/livox_ros_driver2
-RUN . /opt/ros/humble/setup.sh && ./build.sh humble
+# Build livox_ros_driver2 (uses its own build.sh for package file setup)
+WORKDIR ${LIVOX_WS}/src/livox_ros_driver2
+RUN source /opt/ros/humble/setup.bash && ./build.sh humble
 
-### for other packages
-WORKDIR /home/kkondo/code/mighty_ws
-RUN . /opt/ros/humble/setup.sh && \
-    . /home/kkondo/code/decomp_ws/install/setup.sh && \
-    export CMAKE_PREFIX_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2:/home/kkondo/code/decomp_ws/install/decomp_util && \
+# Build the MIGHTY workspace
+WORKDIR ${MIGHTY_WS}
+RUN source /opt/ros/humble/setup.bash && \
+    source ${DECOMP_WS}/install/setup.bash && \
+    export CMAKE_PREFIX_PATH=${LIVOX_WS}/install/livox_ros_driver2:${DECOMP_WS}/install/decomp_util:${CMAKE_PREFIX_PATH} && \
     export MAKEFLAGS="-j${JOBS:-$(nproc)}" && \
-    colcon build ${JOBS:+--parallel-workers $JOBS} --cmake-args -DCMAKE_BUILD_TYPE=Release
+    colcon build ${JOBS:+--parallel-workers $JOBS} \
+                 --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-# Gazebo
-##########################################
-### handle ALSA-related error
-RUN echo    'pcm.!default { \
-                  type plug \
-                  slave.pcm "null" \
-            }' >> /usr/share/alsa/alsa.conf
+# Gazebo audio fix
+RUN echo 'pcm.!default { type plug; slave.pcm "null" }' >> /usr/share/alsa/alsa.conf
 
-# For livox lidar
-ENV LD_LIBRARY_PATH=/home/kkondo/code/livox_ws/install/livox_ros_driver2/lib:/usr/local/lib:/usr/local/include
+# Livox library path
+ENV LD_LIBRARY_PATH=${LIVOX_WS}/install/livox_ros_driver2/lib:/usr/local/lib:/usr/local/include
 
-# Alias
-RUN echo 'alias tks="tmux kill-server"' >> ~/.bashrc
-RUN echo 'alias sb="source ~/.bashrc"' >> ~/.bashrc
-RUN echo 'alias eb="code ~/.bashrc"' >> ~/.bashrc
-RUN echo 'alias gs="git status"' >> ~/.bashrc
-RUN echo 'alias gp="git push"' >> ~/.bashrc
-RUN echo 'alias roscd="cd ~/code/mighty_ws"' >> ~/.bashrc
-RUN echo 'alias cb="roscd && colcon build && sb"' >> ~/.bashrc
-RUN echo 'alias ss="roscd && source install/setup.bash"' >> ~/.bashrc
-RUN echo 'alias cbd="clear && roscd && colcon build && ss"' >> ~/.bashrc
-RUN echo 'alias cbm="clear && roscd && colcon build --packages-select ros2_mapper && ss"' >> ~/.bashrc
-RUN echo 'alias cbsl="roscd && colcon build --symlink-install && sb"' >> ~/.bashrc
-RUN echo 'alias cbps="roscd && colcon build --packages-select"' >> ~/.bashrc
-RUN echo 'alias tf_visualize="ros2 run rqt_tf_tree rqt_tf_tree"' >> ~/.bashrc
-RUN echo 'alias tks="tmux kill-server"' >> ~/.bashrc
+# Shell aliases
+RUN echo 'alias tks="tmux kill-server"'                              >> ~/.bashrc && \
+    echo 'alias sb="source ~/.bashrc"'                               >> ~/.bashrc && \
+    echo 'alias gs="git status"'                                     >> ~/.bashrc && \
+    echo 'alias gp="git push"'                                       >> ~/.bashrc && \
+    echo "alias roscd='cd ${MIGHTY_WS}'"                             >> ~/.bashrc && \
+    echo 'alias cb="roscd && colcon build && sb"'                    >> ~/.bashrc && \
+    echo 'alias ss="roscd && source install/setup.bash"'             >> ~/.bashrc && \
+    echo 'alias cbd="clear && roscd && colcon build && ss"'          >> ~/.bashrc && \
+    echo 'alias cbsl="roscd && colcon build --symlink-install && sb"' >> ~/.bashrc && \
+    echo 'alias cbps="roscd && colcon build --packages-select"'      >> ~/.bashrc && \
+    echo 'alias tf_visualize="ros2 run rqt_tf_tree rqt_tf_tree"'     >> ~/.bashrc
 
 # macOS visualization support
-##########################################
 # Xpra: forwards individual windows efficiently (recommended for Mac)
 # Foxglove: web-based topic viewer
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xpra xvfb libgl1-mesa-glx libgl1-mesa-dri \
-    ros-${ROS_DISTRO}-foxglove-bridge \
-    psmisc \
-    && rm -rf /var/lib/apt/lists/*
+        xpra xvfb libgl1-mesa-glx libgl1-mesa-dri \
+        ros-${ROS_DISTRO}-foxglove-bridge \
+        psmisc && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set up Entry Point
-# ##########################################
+# Entry point
 COPY ./mighty.sh /
 RUN chmod +x /mighty.sh
 ENTRYPOINT ["/mighty.sh"]

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <fstream>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -244,6 +245,8 @@ class MIGHTY_NODE : public rclcpp::Node {
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_vel_text_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_traj_received_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_traj_transformed_;
+  // Corridor-hop yaw-target arrow at G (ground robot only).
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_corridor_yaw_target_;
 
   // Subscribers
   rclcpp::Subscription<dynus_interfaces::msg::DynTraj>::SharedPtr sub_traj_;
@@ -294,6 +297,12 @@ class MIGHTY_NODE : public rclcpp::Node {
   // to late subscribers.
   double last_visited_publish_t_ = 0.0;
 
+  // Latched origin.z of the most recent occ_2d_topic message, so the
+  // visited_map we republish renders at the same ground plane as the live
+  // occupancy grid (global_mapper sets it to z_ground). std::nullopt until
+  // we've seen a real occ_2d — falls back to expl_default_goal_z then.
+  std::optional<double> occ2d_origin_z_;
+
   // Wall-clock seconds of the last visualization publish in replanCallback.
   // The replan loop runs at 100 Hz which is fine for control but floods RViz
   // (especially for traj_committed_colored, hgp_path_marker, and the other
@@ -302,6 +311,12 @@ class MIGHTY_NODE : public rclcpp::Node {
   // We throttle the entire viz block to ~20 Hz (every 50 ms) — plenty smooth
   // visually, ~5x cheaper to render, no message loss.
   double last_replan_viz_publish_t_ = 0.0;
+
+  // Same throttle for actual_traj. publishActualTraj() is called from
+  // stateCallback which fires at the state publisher's rate (100 Hz from
+  // fake_sim), and the persistent LINE_STRIP marker grows large enough that
+  // RViz drops messages at that rate too.
+  double last_actual_traj_publish_t_ = 0.0;
 
   // Visualization
   visualization_msgs::msg::MarkerArray hgp_path_marker_;

@@ -62,26 +62,13 @@ echo "============================================="
 echo "STEP 1: Fixing Repository Issues"
 echo "============================================="
 
-# Fix duplicate ROS 2 repository entries
-if [ -f /etc/apt/sources.list.d/ros2-latest.list ] && [ -f /etc/apt/sources.list.d/ros2.list ]; then
-    echo "Removing duplicate ROS 2 repository..."
-    sudo rm -f /etc/apt/sources.list.d/ros2-latest.list
-fi
-
-# Fix expired ROS 2 GPG key
-echo "Updating ROS 2 GPG key..."
-sudo rm -f /usr/share/keyrings/ros-archive-keyring.gpg
-sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-
-# Disable problematic repositories temporarily
-if [ -f /etc/apt/sources.list.d/github-cli.list ]; then
-    echo "Temporarily disabling GitHub CLI repository..."
-    sudo mv /etc/apt/sources.list.d/github-cli.list /etc/apt/sources.list.d/github-cli.list.disabled || true
-fi
-
-if [ -f /etc/apt/sources.list.d/spotify.list ]; then
-    echo "Temporarily disabling Spotify repository..."
-    sudo mv /etc/apt/sources.list.d/spotify.list /etc/apt/sources.list.d/spotify.list.disabled || true
+# Only add ROS 2 repository if none exists — never overwrite existing setup
+if ls /etc/apt/sources.list.d/ros2* > /dev/null 2>&1; then
+    echo "ROS 2 repository already configured, keeping existing setup."
+else
+    echo "No ROS 2 repository found, adding..."
+    sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
 fi
 
 # ============================================
@@ -91,7 +78,6 @@ echo ""
 echo "============================================="
 echo "STEP 2: System Updates and Basic Software"
 echo "============================================="
-sudo rm -rf /var/lib/apt/lists/*
 sudo apt update
 sudo apt upgrade -y
 sudo apt-get install -q -y --no-install-recommends \
@@ -119,14 +105,7 @@ if [ ! -d "/opt/ros/humble" ]; then
     echo -e "\n" | sudo add-apt-repository universe
     sudo apt update && sudo apt install -y curl
 
-    # Ensure ROS 2 GPG key is properly set up
-    sudo rm -f /usr/share/keyrings/ros-archive-keyring.gpg
-    sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-
-    # Add ROS 2 repository (remove old one first to avoid duplicates)
-    sudo rm -f /etc/apt/sources.list.d/ros2*.list
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
+    # ROS 2 repo already set up in Step 1 — just update
     sudo apt update
     sudo apt install -y ros-humble-desktop
     sudo apt install -y ros-dev-tools
@@ -178,9 +157,7 @@ mkdir -p "$LIVOX_WS/src"
 if [ ! -d "$MIGHTY_WS/src/mighty" ]; then
     echo "Cloning MIGHTY..."
     cd "$MIGHTY_WS/src"
-    git clone https://github.com/mit-acl/mighty.git
-    cd mighty
-    git switch 6237c6524df309e50e34b5501cbef70b2e1c6d80
+    git clone --depth 1 --branch v0.0.5 https://github.com/mit-acl/mighty.git
 else
     echo "MIGHTY already exists, updating..."
     cd "$MIGHTY_WS/src/mighty"
@@ -321,28 +298,20 @@ fi
 # ============================================
 echo ""
 echo "============================================="
-echo "✅ MIGHTY Setup Complete!"
+echo "MIGHTY Setup Complete!"
 echo "============================================="
-echo ""
-echo "All dependencies installed and built:"
-echo "  ✅ ROS 2 Humble"
-echo "  ✅ System dependencies"
-echo "  ✅ DecompROS2 (decomp_ws)"
-echo "  ✅ Livox-SDK2"
-echo "  ✅ livox_ros_driver2 (livox_ws)"
-echo "  ✅ MIGHTY and all ROS packages (mighty_ws)"
 echo ""
 echo "Workspaces:"
 echo "  - MIGHTY:  $MIGHTY_WS"
 echo "  - Decomp:  $DECOMP_WS"
 echo "  - Livox:   $LIVOX_WS"
 echo ""
-echo "To use MIGHTY immediately:"
+echo "To get started:"
 echo "  source ~/.bashrc"
+echo "  cd $MIGHTY_WS"
 echo ""
-echo "Or manually source:"
-echo "  source $DECOMP_WS/install/setup.bash"
-echo "  source $MIGHTY_WS/install/setup.bash"
+echo "  # Single-agent interactive simulation (click goals in RViz2 with \"2D Goal Pose\")"
+echo "  python3 src/mighty/scripts/run_sim.py --mode interactive --setup-bash ~/code/mighty_ws/install/setup.bash"
 echo ""
-echo "All future terminal sessions will have MIGHTY ready to use!"
+echo "See README.md for more simulation modes and options."
 echo "============================================="

@@ -32,6 +32,20 @@ else
 BUILD_ARGS =
 endif
 
+# Dev mode: bind-mount the local mighty source over the in-image one for fast
+# parameter / launch / rviz iteration without rebuilding the image. C++ source
+# changes still need a rebuild (the binaries are baked into the image).
+# Usage: make run-interactive DEV=1
+ifeq ($(DEV),1)
+MIGHTY_SRC := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+DEV_MOUNTS = -v $(MIGHTY_SRC):/home/kkondo/code/mighty_ws/src/mighty \
+             -v $(MIGHTY_SRC)/config:/home/kkondo/code/mighty_ws/install/mighty/share/mighty/config \
+             -v $(MIGHTY_SRC)/launch:/home/kkondo/code/mighty_ws/install/mighty/share/mighty/launch \
+             -v $(MIGHTY_SRC)/rviz:/home/kkondo/code/mighty_ws/install/mighty/share/mighty/rviz
+else
+DEV_MOUNTS =
+endif
+
 .PHONY: build
 build:
 	docker build \
@@ -47,7 +61,7 @@ build-no-cache:
 	--build-arg DUMMY=`date +%s` -t mighty .
 
 # Run single-agent interactive mode (manual 2D Goal Pose via RViz2)
-# Usage: make run-interactive
+# Usage: make run-interactive [DEV=1]
 run-interactive:
 	$(XHOST_CMD) && docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
@@ -55,11 +69,12 @@ run-interactive:
 				$(DISPLAY_ENV) \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e MODE=interactive \
 				--rm mighty
 
 # Run multiagent simulation with custom number of agents
-# Usage: make run-multiagent NUM_AGENTS=5
+# Usage: make run-multiagent NUM_AGENTS=5 [DEV=1]
 run-multiagent:
 	$(XHOST_CMD) && docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
@@ -67,12 +82,13 @@ run-multiagent:
 				$(DISPLAY_ENV) \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e MODE=multiagent \
 				-e NUM_AGENTS=$(or $(NUM_AGENTS),10) \
 				--rm mighty
 
 # Run gazebo simulation with custom goal
-# Usage: make run-gazebo GOAL_X=100 GOAL_Y=50 GOAL_Z=3
+# Usage: make run-gazebo GOAL_X=100 GOAL_Y=50 GOAL_Z=3 [DEV=1]
 run-gazebo:
 	$(XHOST_CMD) && docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
@@ -80,6 +96,7 @@ run-gazebo:
 				$(DISPLAY_ENV) \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e MODE=gazebo \
 				-e GOAL_X=$(or $(GOAL_X),305.0) \
 				-e GOAL_Y=$(or $(GOAL_Y),0.0) \
@@ -88,13 +105,14 @@ run-gazebo:
 				--rm mighty
 
 # Run with Xpra (macOS visualization via browser at http://localhost:8080)
-# Usage: make run-mac [NUM_AGENTS=5]
+# Usage: make run-mac [NUM_AGENTS=5] [DEV=1]
 run-mac:
 	docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
 				--privileged \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e USE_XPRA=true \
 				-e MODE=multiagent \
 				-e NUM_AGENTS=$(or $(NUM_AGENTS),10) \
@@ -102,26 +120,28 @@ run-mac:
 				--rm mighty
 
 # Run single-agent interactive mode with Xpra (manual 2D Goal Pose via RViz2)
-# Usage: make run-mac-interactive
+# Usage: make run-mac-interactive [DEV=1]
 run-mac-interactive:
 	docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
 				--privileged \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e USE_XPRA=true \
 				-e MODE=interactive \
 				-p 8080:8080 \
 				--rm mighty
 
 # Run Gazebo with Xpra (macOS visualization via browser at http://localhost:8080)
-# Usage: make run-mac-gazebo [GOAL_X=100 GOAL_Y=50 GOAL_Z=3]
+# Usage: make run-mac-gazebo [GOAL_X=100 GOAL_Y=50 GOAL_Z=3] [DEV=1]
 run-mac-gazebo:
 	docker run $(PLATFORM_FLAG) -it \
 				$(GPU_FLAGS) \
 				--privileged \
 				$(NETWORK_FLAG) \
 				--env="QT_X11_NO_MITSHM=1" \
+				$(DEV_MOUNTS) \
 				-e USE_XPRA=true \
 				-e MODE=gazebo \
 				-e GOAL_X=$(or $(GOAL_X),305.0) \

@@ -1,15 +1,9 @@
 repositories:
-  # Main MIGHTY package
-  mighty:
-    type: git
-    url: git@github.com:mit-acl/mighty.git
-    version: 6237c6524df309e50e34b5501cbef70b2e1c6d80
-
-  # ROS 2 dependencies (build with colcon)
+  # ROS 2 dependencies (build with colcon in mighty_ws)
   acl-mapping:
     type: git
     url: https://gitlab.com/mit-acl/lab/acl-mapping.git
-    version: c3b27af1549ef1ab549acbe1143bf810a900da95
+    version: 0d3875daf29d163a35c19d356c4652a749ed501d
   dynus_interfaces:
     type: git
     url: https://github.com/kotakondo/dynus_interfaces.git
@@ -21,7 +15,7 @@ repositories:
   livox_laser_simulation_ros2:
     type: git
     url: https://github.com/kotakondo/livox_laser_simulation_ros2.git
-    version: 246040d802ec2d7374f38ffd07e5e7fc49e297fb
+    version: 2f0024c1aebae0ad5d54e70672af824e8fd37dba
   realsense_gazebo_plugin:
     type: git
     url: https://github.com/kotakondo/realsense_gazebo_plugin.git
@@ -29,15 +23,16 @@ repositories:
   uav_simulator:
     type: git
     url: https://github.com/kotakondo/uav_simulator.git
-    version: b196208d3cbf0269b8e80220f7cc1cc992b6c7f8
+    version: d4e953b716789bbb2a687eb4a49fe85d58bc03bc
 
-  # Decomp (needs to build decomp_util first, then rest)
+  # Decomp (built in decomp_ws — decomp_util first, then the rest)
   DecompROS2:
     type: git
     url: https://github.com/kotakondo/DecompROS2.git
     version: a2bc42ed46bf934323994706f17af8a3883860ea
 
-  # Livox dependencies (special build)
+  # Livox dependencies (special build — Livox-SDK2 cmake-installed,
+  # livox_ros_driver2 built in livox_ws via its own build.sh)
   livox_ros_driver2:
     type: git
     url: https://github.com/kotakondo/livox_ros_driver2.git

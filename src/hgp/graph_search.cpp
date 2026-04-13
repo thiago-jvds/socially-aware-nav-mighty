@@ -568,6 +568,20 @@ void GraphSearch::getSucc(const StatePtr& curr, std::vector<int>& succ_ids,
     int new_y = curr->y + d[1];
     int new_z = curr->z + d[2];
 
+    // Bounds check FIRST. Without this, when use_soft_cost_obstacles is on,
+    // isOccupied() returns true for out-of-grid voxels but the soft-cost
+    // branch lets the successor through. coordToId then aliases negative
+    // coordinates to a valid id (e.g. (-1, 58, 9) → id 125694 = (114, 57, 9))
+    // because the linear index x + y*xDim + z*xDim*yDim wraps around when x
+    // is negative. The wraparound corrupts hm_ and produces backward paths
+    // through the negative-x boundary. JPS doesn't hit this because jump()
+    // uses isFree() which is bounds-correct.
+    if (new_x < 0 || new_x >= xDim_ ||
+        new_y < 0 || new_y >= yDim_ ||
+        new_z < 0 || new_z >= zDim_) {
+      continue;
+    }
+
     // Occupancy check
     if (map_util_ && map_util_->has2DMap() && zDim_ == 1 && esdf_grid_) {
       // ESDF mode: only check the 2D ESDF-derived map (skip inflated 3D grid)

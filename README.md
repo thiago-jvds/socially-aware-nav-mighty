@@ -4,6 +4,8 @@ If you like this project, please consider starring ⭐ the repo!
 
 **Accepted to the IEEE Robotics and Automation Letters (RA-L)**
 
+<video src="https://github.com/user-attachments/assets/a5127ce3-6662-4b5f-8ca6-2f84f38fddf8" width="100%" autoplay loop muted playsinline controls></video>
+
 | **Trajectory** | **Forest** |
 | ------------------------- | ------------------------- |
 <a target="_blank" href="https://youtu.be/Pvb-VPUdLvg"><img src="./imgs/mighty_gifs_complex_benchmarks.gif" width="360" height="240" alt="Complex Benchmarks"></a> | <a target="_blank" href="https://youtu.be/Pvb-VPUdLvg"><img src="./imgs/mighty_gifs_hard_forest.gif" width="360" height="240" alt="Static Forest"></a> |
@@ -42,34 +44,32 @@ MIGHTY: Hermite Spline-based Efficient Trajectory Planning is available at [http
 
 The full video is available at [https://youtu.be/Pvb-VPUdLvg](https://youtu.be/Pvb-VPUdLvg).
 
-## Interactive Demo
-
-For an interactive demo of MIGHTY, please switch to the `interactive_demo` branch:
-```bash
-git checkout interactive_demo
-```
-and follow the setup instructions in the README of that branch.
-
-**Note:** When forking this repository, unselect "Copy the main branch only" to include the `interactive_demo` branch.
-
 ---
 
 ## Installation
 
-MIGHTY has been tested on Ubuntu 22.04 with ROS 2 Humble.
+MIGHTY has been tested on Ubuntu 22.04 with ROS 2 Humble. Three installation methods are available:
 
-### Docker Installation (Recommended)
+| Method | Platform | Notes |
+|--------|----------|-------|
+| [Docker (Linux)](#docker-installation-linux) | Linux | Uses Docker Engine (apt install, **not** Docker Desktop) |
+| [Docker (Mac)](#docker-installation-mac) | macOS (Apple Silicon / Intel) | Uses Docker Desktop; Xpra for browser-based visualization |
+| [Native (Linux)](#native-installation-linux) | Ubuntu 22.04 | Best for development and hardware deployment |
 
-**1. Install Docker**
+---
 
-Follow the [official Docker installation guide for Ubuntu](https://docs.docker.com/engine/install/ubuntu/).
+### Docker Installation (Linux)
+
+**1. Install Docker Engine**
+
+Install Docker Engine via apt — do **not** use Docker Desktop on Linux as it may cause issues.
+
+Follow the [official guide (Install using the apt repository)](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository).
 
 **2. Clone the Repository**
 
 ```bash
-mkdir -p ~/code/ws/src
-cd ~/code/ws/src
-git clone https://github.com/mit-acl/mighty.git
+git clone --depth 1 https://github.com/mit-acl/mighty.git
 cd mighty/docker
 ```
 
@@ -83,6 +83,11 @@ make build-no-cache
 ```
 
 **4. Run Simulations**
+
+> **GPU errors?** On Linux, GPU support (NVIDIA) is enabled by default. If you get GPU-related errors (e.g., no NVIDIA driver or runtime), disable it with `GPU=false`:
+> ```bash
+> make run-interactive GPU=false
+> ```
 
 ```bash
 # Single-agent interactive simulation (click goals in RViz2 with "2D Goal Pose")
@@ -143,7 +148,7 @@ In `run-interactive` mode, send goals from the RViz2 toolbar:
 
 ---
 
-### Running on Mac (Apple Silicon / Intel)
+### Docker Installation (Mac)
 
 MIGHTY runs on macOS via Docker with [Xpra](https://xpra.org/) for browser-based visualization. Xpra is installed inside the Docker image automatically — you do **not** need to install Xpra, X11, or XQuartz on your Mac.
 
@@ -163,7 +168,7 @@ Open Docker Desktop and go to **Settings** (gear icon). Two settings must be cha
 #### Building
 
 ```bash
-git clone https://github.com/mit-acl/mighty.git
+git clone --depth 1 https://github.com/mit-acl/mighty.git
 cd mighty/docker
 make build
 ```
@@ -219,7 +224,7 @@ To send a goal manually (in `run-mac-interactive` mode):
 
 ---
 
-### Native Installation
+### Native Installation (Linux)
 
 **1. Clone the Repository**
 
@@ -247,6 +252,7 @@ This automated script will:
 **Notes:**
 - You'll be prompted for sudo password once at the start
 - Safe to re-run if something fails (skips already-installed components)
+- The script appends ROS 2 sourcing, workspace sourcing, and environment variables to `~/.bashrc`
 - After completion, run `source ~/.bashrc` to use MIGHTY immediately
 
 **3. Run Simulations**

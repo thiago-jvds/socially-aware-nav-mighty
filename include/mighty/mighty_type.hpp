@@ -88,6 +88,7 @@ struct parameters {
   double free_start_factor;
   bool use_free_goal;
   double free_goal_factor;
+  bool relocate_occupied_goal;
 
   // LOS post processing parameters
   int los_cells;
@@ -181,6 +182,8 @@ struct parameters {
   double fov_visual_depth;
   double fov_visual_x_deg;
   double fov_visual_y_deg;
+  bool use_sphere_sensing;
+  double sphere_sensing_radius;
 
   // number of segments parameters
   double max_dist_vertexes;  // [m] Maximum distance between two consecutive vertexes
@@ -293,6 +296,29 @@ struct parameters {
   double esdf_d_safe{1.0};             // [m] Safety distance threshold
   int esdf_truncation_distance{10};    // [voxels] Must match mapper config
 
+  // Bend pre-alignment (ground robot only).
+  // At each sharp HGP bend, back off the subgoal along the incoming direction
+  // by corridor_backoff_m so the robot stops short of the inside corner,
+  // turns in place to face the outgoing segment, then drives straight through
+  // the bend. Works in narrow corridors because the robot body never
+  // approaches the inside wall during the turn.
+  //
+  // Detection runs on the RAW A* path (not the resampled / smoothed path) so
+  // corner angles are not blurred by the resample phase. A windowed detector
+  // averages direction over corridor_detection_window_m on each side of every
+  // candidate cell, which kills A* diagonal-grid noise while preserving real
+  // 90° bends.
+  bool corridor_hop_enabled{false};
+  double corridor_corner_angle_deg{75.0};    // min direction change [deg] to count as a real bend
+  double corridor_detection_window_m{0.8};   // arclength used to average incoming/outgoing direction
+  double corridor_backoff_m{0.4};            // subgoal offset backward along the incoming segment
+  double corridor_min_leg_m{0.3};            // min distance from A to the (backed-off) subgoal
+  // Legacy ESDF gradient-ascent snap (kept for build compat — typically off).
+  double corridor_clearance_threshold_m{0.7};
+  double corridor_max_ascent_m{0.0};         // 0 disables the ascent
+  double corridor_ascent_step_m{0.05};
+  int    corridor_ascent_max_iters{0};       // 0 disables the ascent
+
   // Trajectory publishing parameters
   int trajectory_downsample_points{500};  // Number of points to downsample trajectory to
   double mpc_path_spacing{0.05};          // [m] Spacing between waypoints in MPC path
@@ -341,6 +367,11 @@ struct parameters {
   int    expl_verify_radius_cells{2};
   int    expl_max_frontiers{1000};
   int    expl_unreachable_consec_thresh{5};
+  // Pursuit timeout — auto-invalidate a frontier we've been chasing too long.
+  // Budget = max(min_sec, dist / v_ref * factor). Set factor <= 0 to disable.
+  double expl_pursuit_timeout_factor{10.0};
+  double expl_pursuit_timeout_v_ref{0.5};
+  double expl_pursuit_timeout_min_sec{10.0};
   // Persistent visited bitmap (suppresses re-detection of revisited frontiers)
   double expl_visited_map_center_x{0.0};
   double expl_visited_map_center_y{0.0};

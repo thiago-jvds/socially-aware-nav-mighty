@@ -145,6 +145,16 @@ void HGPManager::setupHGPPlanner(const std::string& global_planner, bool global_
     planner_ptr_->setEsdfGrid(esdf_grid_, esdf_weight_astar_, esdf_d_safe_astar_);
   }
 
+  // Corridor-center corner snap post-processing (ground robot only).
+  // Gated on is_ground_robot_ to guarantee UAV flow is untouched.
+  planner_ptr_->setCornerSnapParams(
+      is_ground_robot_ && par_.corridor_hop_enabled,
+      par_.corridor_corner_angle_deg,
+      par_.corridor_clearance_threshold_m,
+      par_.corridor_max_ascent_m,
+      par_.corridor_ascent_step_m,
+      par_.corridor_ascent_max_iters);
+
   // Path smoothing configuration
   planner_ptr_->setDisableAllSmoothing(par_.disable_all_smoothing);
   planner_ptr_->setSkipPathSmoothing(par_.skip_path_smoothing);
@@ -1244,6 +1254,21 @@ bool HGPManager::isMapInitialized() const { return map_initialized_; }
 void HGPManager::findClosestFreePoint(const Vec3f& point, Vec3f& closest_free_point) {
   mtx_map_util_.lock();
   map_util_->findClosestFreePoint(point, closest_free_point);
+  mtx_map_util_.unlock();
+}
+
+void HGPManager::findClosestNonOccupiedPoint(const Vec3f& point,
+                                             Vec3f& closest_non_occupied_point) {
+  // Match checkIfPointOccupied: prefer the planning map (post-inflation) when
+  // it exists, otherwise fall back to the base map. Callers may invoke this
+  // outside of a planning cycle (e.g. from a goal callback).
+  mtx_map_util_.lock();
+  const auto& mu = map_util_for_planning_ ? map_util_for_planning_ : map_util_;
+  if (mu) {
+    mu->findClosestNonOccupiedPoint(point, closest_non_occupied_point);
+  } else {
+    closest_non_occupied_point = point;
+  }
   mtx_map_util_.unlock();
 }
 

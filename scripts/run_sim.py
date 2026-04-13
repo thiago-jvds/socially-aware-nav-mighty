@@ -263,7 +263,7 @@ def generate_multiagent_ground_yaml(setup_bash: Path, agents: list, radius: floa
             'shell_command': [
                 'sleep 10',
                 f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
-                f'use_obstacle_tracker:=false param_file:=global_mapper_ground_robot.yaml quad:={ns}'
+                f'use_obstacle_tracker:=false param_file:=sim_ground_robot.yaml quad:={ns}'
             ]
         })
 
@@ -326,7 +326,7 @@ def generate_dyn_test_yaml(setup_bash: Path, ros_domain_id: int = 7) -> str:
             'shell_command': [
                 'sleep 10',
                 'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
-                'use_obstacle_tracker:=true param_file:=global_mapper.yaml'
+                'use_obstacle_tracker:=true param_file:=sim_uav.yaml'
             ]
         },
         # Onboard agent NX01 — stationary, no goal sent
@@ -382,7 +382,7 @@ def generate_dyn_test_ground_yaml(setup_bash: Path, ros_domain_id: int = 7) -> s
             'shell_command': [
                 'sleep 10',
                 'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
-                'use_obstacle_tracker:=false param_file:=global_mapper_ground_robot.yaml'
+                'use_obstacle_tracker:=false param_file:=sim_ground_robot.yaml'
             ]
         },
         # Onboard agent NX01 — ground robot, no goal sent
@@ -442,7 +442,7 @@ def generate_dyn_test_ground_mpc_yaml(setup_bash: Path, ros_domain_id: int = 7) 
             'shell_command': [
                 'sleep 10',
                 'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
-                'use_obstacle_tracker:=true param_file:=global_mapper_ground_robot.yaml'
+                'use_obstacle_tracker:=true param_file:=sim_ground_robot.yaml'
             ]
         },
         # Onboard agent NX01 — ground robot with MPC enabled (no pure pursuit)
@@ -510,24 +510,24 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
         # Converts /NX01/odom (from Gazebo diff_drive) to /NX01/state (for mapper and planner)
         {
             'shell_command': [
-                'sleep 10',
+                'sleep 3',
                 'ros2 run mighty convert_odom_to_state --ros-args -r __ns:=/NX01 -r odom:=odom -r state:=state'
             ] if use_ground_robot else ['echo "Skipping convert_odom_to_state (UAV mode)"']
         },
         # ACL mapper
         {
             'shell_command': [
-                'sleep 10',
+                'sleep 3',
                 'source ~/code/mighty_ws/install/setup.bash',
                 f'ros2 launch global_mapper_ros global_mapper_node.launch.py use_gazebo:=true '
                 f'use_obstacle_tracker:=false '
-                f'param_file:={"global_mapper_ground_robot.yaml" if use_ground_robot else "global_mapper.yaml"}'
+                f'param_file:={"sim_ground_robot.yaml" if use_ground_robot else "sim_uav.yaml"}'
             ]
         },
         # Onboard agent NX01
         {
             'shell_command': [
-                'sleep 10',
+                'sleep 3',
                 f'ros2 launch mighty onboard_mighty.launch.py x:={start_x} y:={start_y} z:={start_z} yaw:={start_yaw} '
                 f'sim_env:={sim_env} use_ground_robot:={str(use_ground_robot).lower()}'
             ]
@@ -550,7 +550,7 @@ def generate_gazebo_yaml(setup_bash: Path, goal: tuple, sim_env: str,
     ]
 
     if not no_goal:
-        goal_points = [list(g) for g in goals]
+        goal_points = [list(g) for g in goal]
         panes.append({
             'shell_command': [
                 'sleep 20',
@@ -826,7 +826,18 @@ def main():
         print(f"[INFO] Launching simulation...")
         env = os.environ.copy()
         env['SETUP_BASH'] = str(setup_bash)
-        subprocess.run(['tmuxp', 'load', temp_yaml_path], env=env, check=True)
+        subprocess.run(['tmuxp', 'load', '-d', temp_yaml_path], env=env, check=True)
+        print("")
+        print("[INFO] Simulation starting up — this takes ~15-20 seconds.")
+        print("[INFO]   1. Gazebo loads the world and spawns the robot (~5-10s)")
+        print("[INFO]   2. Planner, mapper, and fake_sim nodes come online (~3-5s)")
+        print("[INFO]   3. Exploration loop picks the first frontier goal (~1s)")
+        print("[INFO]   4. Robot begins moving once the first trajectory is computed")
+        print("")
+        print("[INFO] Attach to the tmux session to watch node output:")
+        print("[INFO]   tmux attach -t mighty_sim")
+        print("[INFO] Kill the simulation with:")
+        print("[INFO]   tmux kill-session -t mighty_sim")
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] Failed to launch simulation: {e}", file=sys.stderr)
         sys.exit(1)

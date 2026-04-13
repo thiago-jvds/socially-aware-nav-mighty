@@ -13,9 +13,43 @@
 #include <mighty/frontier_manager.hpp>
 #include <mighty/visited_map.hpp>
 
+#include <fstream>
+#include <iomanip>
+
 using namespace std::chrono_literals;
 
 namespace mighty {
+
+// Debug log: writes every published /goal and every received /term_goal to a
+// file so the dip-toward-origin bug can be analyzed offline. Set debug_log_file
+// to "" in the YAML to disable.
+namespace {
+double& debug_log_t0() {
+  static double t0 = 0.0;
+  return t0;
+}
+std::ofstream& debug_log_stream() {
+  static std::ofstream s;  // never closed; flushed on every write
+  return s;
+}
+void debug_log_open(const std::string& path) {
+  if (path.empty()) return;
+  auto& s = debug_log_stream();
+  if (!s.is_open()) {
+    s.open(path, std::ios::out | std::ios::trunc);
+    if (s.is_open()) {
+      s << std::fixed << std::setprecision(4);
+      s << "# t_rel_sec | event | px | py | pz | extra\n";
+      s.flush();
+    }
+  }
+}
+double debug_log_t(double now_sec) {
+  auto& t0 = debug_log_t0();
+  if (t0 == 0.0) t0 = now_sec;
+  return now_sec - t0;
+}
+}  // namespace
 
 // ----------------------------------------------------------------------------
 
@@ -136,6 +170,8 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
       "traj_received", 10);  // frame alignment debug
   pub_traj_transformed_ = this->create_publisher<visualization_msgs::msg::Marker>(
       "traj_transformed", 10);  // frame alignment debug // visual level 1
+  pub_corridor_yaw_target_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "corridor_yaw_target", 10);  // ground-robot corridor-hop TIP target arrow
 
   // Debug publishers
   pub_yaw_output_ = this->create_publisher<dynus_interfaces::msg::YawOutput>("yaw_output", 10);
@@ -318,6 +354,9 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
       mp.dist_ref_m      = par_.expl_dist_ref_m;
       mp.sensor_radius_m = par_.expl_sensor_radius_m;
       mp.goal_select_threshold = par_.expl_goal_select_threshold;
+      mp.pursuit_timeout_factor  = par_.expl_pursuit_timeout_factor;
+      mp.pursuit_timeout_v_ref   = par_.expl_pursuit_timeout_v_ref;
+      mp.pursuit_timeout_min_sec = par_.expl_pursuit_timeout_min_sec;
       frontier_manager_ = std::make_unique<FrontierManager>(mp);
 
       // Persistent visited bitmap. Records every cell ever observed across
@@ -418,6 +457,7 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("free_start_factor", 1.0);
   this->declare_parameter("use_free_goal", false);
   this->declare_parameter("free_goal_factor", 1.0);
+  this->declare_parameter("relocate_occupied_goal", true);
   this->declare_parameter("max_dist_vertexes", 5.0);
   this->declare_parameter("w_unknown", 1.0);
   this->declare_parameter("w_align", 60.0);
@@ -512,6 +552,8 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("fov_visual_depth", 10.0);
   this->declare_parameter("fov_visual_x_deg", 10.0);
   this->declare_parameter("fov_visual_y_deg", 10.0);
+  this->declare_parameter("use_sphere_sensing", false);
+  this->declare_parameter("sphere_sensing_radius", 5.0);
 
   // Initial guess parameters
   this->declare_parameter("use_multiple_initial_guesses", true);
@@ -592,6 +634,7 @@ void MIGHTY_NODE::declareParameters() {
 
   // Debug flags
   this->declare_parameter("debug_verbose", false);
+  this->declare_parameter("debug_log_file", std::string(""));  // path to per-publish/per-term-goal log; "" disables
 
   // Ground robot control parameters
   this->declare_parameter("ground_robot_kx", 0.1);
@@ -617,6 +660,17 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("esdf_weight", 1e+3);
   this->declare_parameter("esdf_d_safe", 1.0);
   this->declare_parameter("esdf_truncation_distance", 10);
+
+  // Bend pre-alignment (ground robot only)
+  this->declare_parameter("corridor_hop_enabled", false);
+  this->declare_parameter("corridor_corner_angle_deg", 75.0);
+  this->declare_parameter("corridor_detection_window_m", 0.8);
+  this->declare_parameter("corridor_backoff_m", 0.4);
+  this->declare_parameter("corridor_min_leg_m", 0.3);
+  this->declare_parameter("corridor_clearance_threshold_m", 0.7);
+  this->declare_parameter("corridor_max_ascent_m", 0.0);
+  this->declare_parameter("corridor_ascent_step_m", 0.05);
+  this->declare_parameter("corridor_ascent_max_iters", 0);
 
   this->declare_parameter("trajectory_downsample_points", 500);
   this->declare_parameter("mpc_path_spacing", 0.05);
@@ -651,6 +705,9 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("exploration.manager.verify_radius_cells", 2);
   this->declare_parameter("exploration.manager.max_frontiers", 1000);
   this->declare_parameter("exploration.manager.unreachable_consec_thresh", 5);
+  this->declare_parameter("exploration.manager.pursuit_timeout_factor", 10.0);
+  this->declare_parameter("exploration.manager.pursuit_timeout_v_ref", 0.5);
+  this->declare_parameter("exploration.manager.pursuit_timeout_min_sec", 10.0);
   this->declare_parameter("exploration.visited_map.center_x", 0.0);
   this->declare_parameter("exploration.visited_map.center_y", 0.0);
   this->declare_parameter("exploration.visited_map.width_m", 100.0);
@@ -749,6 +806,7 @@ void MIGHTY_NODE::setParameters() {
   par_.free_start_factor = this->get_parameter("free_start_factor").as_double();
   par_.use_free_goal = this->get_parameter("use_free_goal").as_bool();
   par_.free_goal_factor = this->get_parameter("free_goal_factor").as_double();
+  par_.relocate_occupied_goal = this->get_parameter("relocate_occupied_goal").as_bool();
   par_.max_dist_vertexes = this->get_parameter("max_dist_vertexes").as_double();
   par_.w_unknown = this->get_parameter("w_unknown").as_double();
   par_.w_align = this->get_parameter("w_align").as_double();
@@ -847,6 +905,8 @@ void MIGHTY_NODE::setParameters() {
   par_.fov_visual_depth = this->get_parameter("fov_visual_depth").as_double();
   par_.fov_visual_x_deg = this->get_parameter("fov_visual_x_deg").as_double();
   par_.fov_visual_y_deg = this->get_parameter("fov_visual_y_deg").as_double();
+  par_.use_sphere_sensing = this->get_parameter("use_sphere_sensing").as_bool();
+  par_.sphere_sensing_radius = this->get_parameter("sphere_sensing_radius").as_double();
 
   // Initial guess parameters
   par_.use_multiple_initial_guesses = this->get_parameter("use_multiple_initial_guesses").as_bool();
@@ -936,6 +996,13 @@ void MIGHTY_NODE::setParameters() {
 
   // Debug flags
   par_.debug_verbose = this->get_parameter("debug_verbose").as_bool();
+  {
+    auto path = this->get_parameter("debug_log_file").as_string();
+    debug_log_open(path);
+    if (!path.empty()) {
+      RCLCPP_INFO(this->get_logger(), "Debug log file: %s", path.c_str());
+    }
+  }
 
   // Ground robot control parameters
   par_.ground_robot_kx = this->get_parameter("ground_robot_kx").as_double();
@@ -960,6 +1027,16 @@ void MIGHTY_NODE::setParameters() {
   par_.esdf_weight = this->get_parameter("esdf_weight").as_double();
   par_.esdf_d_safe = this->get_parameter("esdf_d_safe").as_double();
   par_.esdf_truncation_distance = this->get_parameter("esdf_truncation_distance").as_int();
+
+  par_.corridor_hop_enabled = this->get_parameter("corridor_hop_enabled").as_bool();
+  par_.corridor_corner_angle_deg = this->get_parameter("corridor_corner_angle_deg").as_double();
+  par_.corridor_detection_window_m = this->get_parameter("corridor_detection_window_m").as_double();
+  par_.corridor_backoff_m = this->get_parameter("corridor_backoff_m").as_double();
+  par_.corridor_min_leg_m = this->get_parameter("corridor_min_leg_m").as_double();
+  par_.corridor_clearance_threshold_m = this->get_parameter("corridor_clearance_threshold_m").as_double();
+  par_.corridor_max_ascent_m = this->get_parameter("corridor_max_ascent_m").as_double();
+  par_.corridor_ascent_step_m = this->get_parameter("corridor_ascent_step_m").as_double();
+  par_.corridor_ascent_max_iters = this->get_parameter("corridor_ascent_max_iters").as_int();
 
   par_.trajectory_downsample_points = this->get_parameter("trajectory_downsample_points").as_int();
   par_.mpc_path_spacing = this->get_parameter("mpc_path_spacing").as_double();
@@ -997,6 +1074,12 @@ void MIGHTY_NODE::setParameters() {
   par_.expl_max_frontiers        = this->get_parameter("exploration.manager.max_frontiers").as_int();
   par_.expl_unreachable_consec_thresh =
       this->get_parameter("exploration.manager.unreachable_consec_thresh").as_int();
+  par_.expl_pursuit_timeout_factor =
+      this->get_parameter("exploration.manager.pursuit_timeout_factor").as_double();
+  par_.expl_pursuit_timeout_v_ref =
+      this->get_parameter("exploration.manager.pursuit_timeout_v_ref").as_double();
+  par_.expl_pursuit_timeout_min_sec =
+      this->get_parameter("exploration.manager.pursuit_timeout_min_sec").as_double();
   par_.expl_visited_map_center_x   = this->get_parameter("exploration.visited_map.center_x").as_double();
   par_.expl_visited_map_center_y   = this->get_parameter("exploration.visited_map.center_y").as_double();
   par_.expl_visited_map_width_m    = this->get_parameter("exploration.visited_map.width_m").as_double();
@@ -1053,6 +1136,7 @@ void MIGHTY_NODE::printParameters() {
   RCLCPP_INFO(this->get_logger(), "Free Start Factor: %f", par_.free_start_factor);
   RCLCPP_INFO(this->get_logger(), "Use Free Goal?: %d", par_.use_free_goal);
   RCLCPP_INFO(this->get_logger(), "Free Goal Factor: %f", par_.free_goal_factor);
+  RCLCPP_INFO(this->get_logger(), "Relocate Occupied Goal?: %d", par_.relocate_occupied_goal);
   RCLCPP_INFO(this->get_logger(), "max_dist_vertexes: %f", par_.max_dist_vertexes);
   RCLCPP_INFO(this->get_logger(), "w_unknown: %f", par_.w_unknown);
   RCLCPP_INFO(this->get_logger(), "w_align: %f", par_.w_align);
@@ -1106,6 +1190,8 @@ void MIGHTY_NODE::printParameters() {
   RCLCPP_INFO(this->get_logger(), "FOV Visual Depth: %f", par_.fov_visual_depth);
   RCLCPP_INFO(this->get_logger(), "FOV Visual X Deg: %f", par_.fov_visual_x_deg);
   RCLCPP_INFO(this->get_logger(), "FOV Visual Y Deg: %f", par_.fov_visual_y_deg);
+  RCLCPP_INFO(this->get_logger(), "Use Sphere Sensing: %d", par_.use_sphere_sensing);
+  RCLCPP_INFO(this->get_logger(), "Sphere Sensing Radius: %f", par_.sphere_sensing_radius);
 
   // Initial guess parameters
   RCLCPP_INFO(this->get_logger(), "Use Multiple Initial Guesses: %d",
@@ -1335,7 +1421,17 @@ void MIGHTY_NODE::stateCallback(const dynus_interfaces::msg::State::SharedPtr ms
     timer_goal_->reset();
   }
 
-  if (par_.visual_level >= 1) publishActualTraj();
+  // Throttle actual_traj viz to ~20 Hz to match the replan viz throttle.
+  // stateCallback runs at 100 Hz (fake_sim publishes state every 10 ms) and
+  // the persistent LINE_STRIP marker is large enough that RViz drops
+  // messages with "some messages were lost" warnings without throttling.
+  if (par_.visual_level >= 1) {
+    const double t_now_actual = this->now().seconds();
+    if (t_now_actual - last_actual_traj_publish_t_ >= 0.05) {
+      publishActualTraj();
+      last_actual_traj_publish_t_ = t_now_actual;
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -1369,6 +1465,15 @@ void MIGHTY_NODE::replanCallback() {
   auto [replanning_result, hgp_result] =
       mighty_ptr_->replan(replanning_computation_time_, current_time);
 
+  // Republish the terminal goal marker so RViz tracks any in-replan
+  // relocation done by sanitizeTerminalGoal (e.g. when an obstacle gets
+  // sensed after the original click and the goal jumps to a clear cell).
+  if (par_.relocate_occupied_goal) {
+    state gterm_now;
+    mighty_ptr_->getGterm(gterm_now);
+    publishState(gterm_now, pub_point_G_term_);
+  }
+
   // Get computation time (used to find point A) - note this value is not updated in the replan
   // function
   if (replanning_result) {
@@ -1376,6 +1481,38 @@ void MIGHTY_NODE::replanCallback() {
     replanning_computation_time_ = this->now().seconds() - current_time;
     if (par_.debug_verbose)
       printf("Total Replanning: %f ms\n", replanning_computation_time_ * 1000.0);
+  }
+
+  // Debug log: dump global path + local trajectory endpoints on every replan
+  // so backward-planning bugs can be diagnosed offline.
+  if (auto& s = debug_log_stream(); s.is_open()) {
+    state cur, gterm, gsub, lA;
+    mighty_ptr_->getState(cur);
+    mighty_ptr_->getGterm(gterm);
+    mighty_ptr_->getG(gsub);
+    mighty_ptr_->getA(lA);
+    s << debug_log_t(this->now().seconds()) << " REPLAN"
+      << " ok=" << (replanning_result ? 1 : 0)
+      << " hgp=" << (hgp_result ? 1 : 0)
+      << " state=" << cur.pos.x() << "," << cur.pos.y() << "," << cur.pos.z()
+      << " A=" << lA.pos.x() << "," << lA.pos.y() << "," << lA.pos.z()
+      << " G=" << gsub.pos.x() << "," << gsub.pos.y() << "," << gsub.pos.z()
+      << " Gterm=" << gterm.pos.x() << "," << gterm.pos.y() << "," << gterm.pos.z()
+      << "\n";
+    if (hgp_result) {
+      vec_Vecf<3> gp;
+      mighty_ptr_->getGlobalPath(gp);
+      s << "  HGP_PATH n=" << gp.size();
+      auto dump = [&](size_t i) {
+        s << " [" << i << "]=" << gp[i].x() << "," << gp[i].y() << "," << gp[i].z();
+      };
+      if (gp.size() >= 1) dump(0);
+      if (gp.size() >= 2) dump(1);
+      if (gp.size() >= 3) dump(2);
+      if (gp.size() >= 4) dump(gp.size() - 1);
+      s << "\n";
+    }
+    s.flush();
   }
 
   // Frontier-unreachable detection: if the global planner consistently fails
@@ -1519,6 +1656,16 @@ void MIGHTY_NODE::terminalGoalCallbackImpl(const geometry_msgs::msg::PoseStamped
   goal_received_time_ = this->now();
   waiting_for_first_traj_ = true;
 
+  // Debug log: every received term_goal
+  if (auto& s = debug_log_stream(); s.is_open()) {
+    s << debug_log_t(this->now().seconds()) << " TERM_GOAL "
+      << msg.pose.position.x << " " << msg.pose.position.y << " " << msg.pose.position.z
+      << " from_user=" << (from_user ? 1 : 0)
+      << " frame=" << msg.header.frame_id
+      << "\n";
+    s.flush();
+  }
+
   if (from_user) {
     manual_goal_active_ = true;
     // A manual goal preempts any in-progress exploration goal.
@@ -1544,6 +1691,23 @@ void MIGHTY_NODE::terminalGoalCallbackImpl(const geometry_msgs::msg::PoseStamped
 
   // Set the terminal goal
   G_term.setPos(msg.pose.position.x, msg.pose.position.y, goal_z);
+
+  // If the goal lies in an occupied voxel, relocate it to the nearest
+  // free/unknown cell with ||drone_bbox|| clearance from the original point.
+  // The mutated G_term then flows into both the planner and the RViz marker.
+  if (par_.relocate_occupied_goal) {
+    if (!mighty_ptr_->sanitizeTerminalGoal(G_term)) {
+      // ERROR (not WARN) so it survives --log-level error in the launch file.
+      RCLCPP_ERROR(this->get_logger(),
+                   "Goal at (%.2f,%.2f,%.2f) is in occupied space and could not be "
+                   "relocated; ignoring.",
+                   msg.pose.position.x, msg.pose.position.y, goal_z);
+      return;
+    }
+    // Re-clamp z in case the BFS pushed the relocated goal out of bounds.
+    if (G_term.pos.z() < par_.z_min) G_term.pos.z() = par_.z_min;
+    if (G_term.pos.z() > par_.z_max) G_term.pos.z() = par_.z_max;
+  }
 
   // Update the terminal goal
   mighty_ptr_->setTerminalGoal(G_term);
@@ -2124,6 +2288,40 @@ void MIGHTY_NODE::publishPointG() const {
 
   // Publish the goal for visualization
   publishState(G, pub_point_G_);
+
+  // Corridor-hop TIP target arrow (ground robot only).
+  // Draws a yellow arrow at G pointing in direction G.yaw, which is the
+  // heading the robot will turn-in-place to once it arrives at this
+  // subgoal. Skips visualization entirely for UAVs or when the feature is
+  // disabled so no markers clutter the scene.
+  if (par_.vehicle_type == "ground_robot" && par_.corridor_hop_enabled) {
+    visualization_msgs::msg::Marker arrow;
+    arrow.header.frame_id = par_.map_frame_id;
+    arrow.header.stamp = this->now();
+    arrow.ns = "corridor_yaw_target";
+    arrow.id = 0;
+    arrow.type = visualization_msgs::msg::Marker::ARROW;
+    arrow.action = visualization_msgs::msg::Marker::ADD;
+    arrow.scale.x = 0.05;  // shaft diameter
+    arrow.scale.y = 0.10;  // head diameter
+    arrow.scale.z = 0.10;  // head length
+    arrow.color.r = 1.0;
+    arrow.color.g = 1.0;
+    arrow.color.b = 0.0;
+    arrow.color.a = 1.0;
+    arrow.lifetime = rclcpp::Duration::from_seconds(1.0);
+    geometry_msgs::msg::Point p_start, p_end;
+    p_start.x = G.pos.x();
+    p_start.y = G.pos.y();
+    p_start.z = G.pos.z();
+    const double arrow_len = 0.6;
+    p_end.x = G.pos.x() + arrow_len * std::cos(G.yaw);
+    p_end.y = G.pos.y() + arrow_len * std::sin(G.yaw);
+    p_end.z = G.pos.z();
+    arrow.points.push_back(p_start);
+    arrow.points.push_back(p_end);
+    pub_corridor_yaw_target_->publish(arrow);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -2364,6 +2562,22 @@ void MIGHTY_NODE::publishGoal() {
     quadGoal.yaw = next_goal.yaw;
     quadGoal.dyaw = next_goal.dyaw;
     pub_goal_->publish(quadGoal);
+
+    // Debug log: every published setpoint, with current state and plan front
+    // for context. Helps trace dip-toward-origin bugs.
+    if (auto& s = debug_log_stream(); s.is_open()) {
+      state cur, gterm, gsub;
+      mighty_ptr_->getState(cur);
+      mighty_ptr_->getGterm(gterm);
+      mighty_ptr_->getG(gsub);
+      s << debug_log_t(this->now().seconds()) << " GOAL "
+        << next_goal.pos.x() << " " << next_goal.pos.y() << " " << next_goal.pos.z()
+        << " state=" << cur.pos.x() << "," << cur.pos.y() << "," << cur.pos.z()
+        << " G=" << gsub.pos.x() << "," << gsub.pos.y() << "," << gsub.pos.z()
+        << " Gterm=" << gterm.pos.x() << "," << gterm.pos.y() << "," << gterm.pos.z()
+        << "\n";
+      s.flush();
+    }
 
     // Publish the goal (setpoint) for visualization
     if (par_.visual_level >= 1) publishState(next_goal, pub_setpoint_);
@@ -2767,9 +2981,25 @@ void MIGHTY_NODE::constructFOVMarker() {
   marker_fov_.ns = "marker_fov";
   marker_fov_.id = marker_fov_id_++;
   marker_fov_.frame_locked = true;
-  marker_fov_.type = marker_fov_.LINE_LIST;
   marker_fov_.action = marker_fov_.ADD;
   marker_fov_.pose = mighty_utils::identityGeometryMsgsPose();
+
+  // Sphere sensing mode: render a translucent sphere instead of the camera frustum.
+  if (par_.use_sphere_sensing) {
+    marker_fov_.type = marker_fov_.SPHERE;
+    marker_fov_.points.clear();
+    const double diameter = 2.0 * par_.sphere_sensing_radius;
+    marker_fov_.scale.x = diameter;
+    marker_fov_.scale.y = diameter;
+    marker_fov_.scale.z = diameter;
+    marker_fov_.color.a = 0.15;
+    marker_fov_.color.r = 0.0;
+    marker_fov_.color.g = 1.0;
+    marker_fov_.color.b = 0.0;
+    return;
+  }
+
+  marker_fov_.type = marker_fov_.LINE_LIST;
 
   double delta_y = par_.fov_visual_depth * fabs(tan((par_.fov_visual_x_deg * M_PI / 180) / 2.0));
   double delta_z = par_.fov_visual_depth * fabs(tan((par_.fov_visual_y_deg * M_PI / 180) / 2.0));
@@ -2911,6 +3141,10 @@ void MIGHTY_NODE::esdfCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg
 }
 
 void MIGHTY_NODE::occ2DCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+  // Remember the global mapper's ground-plane z so publishVisitedMap() can
+  // render at the same height as the live occ_2d layer in RViz.
+  occ2d_origin_z_ = msg->info.origin.position.z;
+
   // Persistent-map fusion: any cell that arrived UNKNOWN from the mapper but
   // was previously observed (FREE or OCCUPIED) gets restored from
   // visited_map_ before we build OccGrid2D. So when the robot revisits a
@@ -3112,6 +3346,9 @@ void MIGHTY_NODE::exploreSelectCallback() {
   current_explore_id_       = next->id;
   exploration_active_       = true;
   unreachable_consec_count_ = 0;
+  frontier_manager_->markSelected(
+      next->id, Eigen::Vector2d(robot_pose.x(), robot_pose.y()),
+      this->now().seconds());
   publishExplorationCurrentGoal(*next);
 }
 
@@ -3331,7 +3568,11 @@ void MIGHTY_NODE::publishVisitedMap() {
   msg.info.height     = static_cast<unsigned>(visited_map_->height());
   msg.info.origin.position.x    = visited_map_->originX();
   msg.info.origin.position.y    = visited_map_->originY();
-  msg.info.origin.position.z    = par_.expl_default_goal_z;
+  // Match whatever z the live occ_2d layer is at (global_mapper uses
+  // z_ground). Falls back to the exploration default goal z until the first
+  // occ_2d arrives so a late RViz subscriber still sees a sensible plane.
+  msg.info.origin.position.z    =
+      occ2d_origin_z_.value_or(par_.expl_default_goal_z);
   msg.info.origin.orientation.w = 1.0;
 
   const auto& v = visited_map_->data();
