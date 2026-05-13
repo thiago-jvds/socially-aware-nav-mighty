@@ -25,7 +25,7 @@
   <!-- <xacro:p3at_gazebo_ext name="$(arg namespace)_red_rover" namespace="$(arg namespace)" /> -->
 
   <xacro:include filename="$(find ros2_livox_simulation)/urdf/mid360.xacro" />
-  <xacro:mid360 name="$(arg namespace)_livox" namespace="$(arg namespace)" parent="base_link" topic="mid360" lidar_update_rate="10" >
+  <xacro:mid360 name="$(arg namespace)_livox" namespace="$(arg namespace)" parent="base_link" topic="mid360" >
     <origin xyz="0 0 1.0" rpy="0 0.3 0"/>
   </xacro:mid360>
 

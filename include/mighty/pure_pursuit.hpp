@@ -5,6 +5,7 @@
 
 #include <dynus_interfaces/msg/state.hpp>
 #include <dynus_interfaces/msg/trajectory.hpp>
+#include <dynus_interfaces/msg/halt.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -25,6 +26,7 @@ class PurePursuit : public rclcpp::Node {
  private:
   void trajectoryCallback(const dynus_interfaces::msg::Trajectory::SharedPtr msg);
   void stateCallback(const dynus_interfaces::msg::State::SharedPtr msg);
+  void haltCallback(const dynus_interfaces::msg::Halt::SharedPtr msg);
   void controlCallback();
 
   size_t findClosestWaypointIndex();
@@ -38,6 +40,7 @@ class PurePursuit : public rclcpp::Node {
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_lookahead_marker_;
   rclcpp::Subscription<dynus_interfaces::msg::Trajectory>::SharedPtr sub_trajectory_;
   rclcpp::Subscription<dynus_interfaces::msg::State>::SharedPtr sub_state_;
+  rclcpp::Subscription<dynus_interfaces::msg::Halt>::SharedPtr sub_halt_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // State
@@ -45,6 +48,8 @@ class PurePursuit : public rclcpp::Node {
   dynus_interfaces::msg::Trajectory trajectory_;
   bool state_initialized_;
   bool trajectory_initialized_;
+  bool halt_initialized_ = false;
+  bool to_halt_ = false;
 
   // Parameters
   double L_min_;                        // Minimum lookahead distance (m)

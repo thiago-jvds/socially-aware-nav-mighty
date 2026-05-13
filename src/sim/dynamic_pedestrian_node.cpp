@@ -84,6 +84,9 @@ public:
         std::string pedestrians_json_str = declare_parameter<std::string>("pedestrians_json", "[]");
         global_frame_ = declare_parameter<std::string>("global_frame", "map");
         base_link_name_ = declare_parameter<std::string>("base_link_name", "base_link");
+        move_models_ = declare_parameter<bool>("move_models", false);
+        publish_tf_ = declare_parameter<bool>("publish_tf", true);
+        model_state_reference_frame_ = declare_parameter<std::string>("model_state_reference_frame", "world");
 
         try
         {
@@ -116,13 +119,21 @@ public:
             RCLCPP_ERROR(get_logger(), "Failed to parse/compile pedestrians_json: %s", e.what());
         }
 
-        model_state_pub_ = create_publisher<gazebo_msgs::msg::ModelState>("/gazebo/set_model_state", 50);
+        if (move_models_)
+        {
+            model_state_pub_ = create_publisher<gazebo_msgs::msg::ModelState>("/gazebo/set_model_state", 50);
+        }
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
         double period = (publish_rate_hz_ > 0.0) ? 1.0 / publish_rate_hz_ : 0.02;
         timer_ = create_wall_timer(
             std::chrono::duration<double>(period),
             std::bind(&DynamicPedestrianNode::timerCB, this));
+
+        RCLCPP_INFO(get_logger(), "DynamicPedestrianNode configured: move_models=%s publish_tf=%s rate=%.2fHz",
+                move_models_ ? "true" : "false",
+                publish_tf_ ? "true" : "false",
+                publish_rate_hz_);
     }
 
 private:
@@ -134,10 +145,8 @@ private:
         int idx = 0;
         for (auto &p : pedestrians_)
         {
-            p.t_var = t_now;
-            double x = p.expr_x.value();
-            double y = p.expr_y.value();
-            double z = p.expr_z.value();
+            double x, y, z;
+            p.evaluate(t_now, x, y, z);
 
             nav_msgs::msg::Odometry odom;
             odom.header.stamp = stamp;
@@ -170,6 +179,7 @@ private:
             {
                 gazebo_msgs::msg::ModelState ms;
                 ms.model_name = p.model_name;
+                ms.reference_frame = model_state_reference_frame_;
                 ms.pose.position.x = x;
                 ms.pose.position.y = y;
                 ms.pose.position.z = z;
@@ -189,6 +199,7 @@ private:
     std::string base_link_name_;
     bool move_models_{false};
     bool publish_tf_{true};
+    std::string model_state_reference_frame_;
 
     std::vector<PedestrianSpec> pedestrians_;
 

@@ -46,6 +46,9 @@ PurePursuit::PurePursuit()
   sub_state_ = this->create_subscription<dynus_interfaces::msg::State>(
       "state", 10, std::bind(&PurePursuit::stateCallback, this, std::placeholders::_1));
 
+  sub_halt_ = this->create_subscription<dynus_interfaces::msg::Halt>(
+      "halt", 10, std::bind(&PurePursuit::haltCallback, this, std::placeholders::_1));
+
   // Control timer
   timer_ =
       this->create_wall_timer(std::chrono::milliseconds(static_cast<int>(1000.0 / control_rate_)),
@@ -60,6 +63,11 @@ void PurePursuit::trajectoryCallback(const dynus_interfaces::msg::Trajectory::Sh
 void PurePursuit::stateCallback(const dynus_interfaces::msg::State::SharedPtr msg) {
   current_state_ = *msg;
   state_initialized_ = true;
+}
+
+void PurePursuit::haltCallback(const dynus_interfaces::msg::Halt::SharedPtr msg) {
+  to_halt_ = msg->to_halt;
+  halt_initialized_ = true;
 }
 
 size_t PurePursuit::findClosestWaypointIndex() {
@@ -115,6 +123,16 @@ double PurePursuit::wrapPi(double angle) {
 
 void PurePursuit::controlCallback() {
   if (!state_initialized_ || !trajectory_initialized_ || trajectory_.goals.empty()) {
+    return;
+  }
+
+  if (halt_initialized_ && to_halt_) {
+    geometry_msgs::msg::Twist twist;
+    twist.linear.x = 0.0;
+    twist.angular.z = 0.0;
+    pub_cmd_vel_->publish(twist);
+    prev_w_command_ = 0.0;
+    prev_v_command_ = 0.0;
     return;
   }
 

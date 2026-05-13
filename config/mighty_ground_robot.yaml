@@ -64,8 +64,8 @@ mighty_node:
         # --- Map Bounds ---
         x_min: -1000.0                                  # [m] Map x lower bound
         x_max: 1000.0                                   # [m] Map x upper bound
-        y_min: -1000.0                                  # [m] Map y lower bound
-        y_max: 1000.0                                   # [m] Map y upper bound
+        y_min: -2.0                                  # [m] Map y lower bound
+        y_max: 2.0                                   # [m] Map y upper bound
         z_min: 0.0                                     # [m] Min altitude (points below are ground)
         z_max: 3.0                                      # [m] Max altitude (high enough to capture wall voxels for 2D projection)
         mighty_map_res: 0.15                             # [m] Voxel map resolution (coarser for ground robot)
@@ -76,7 +76,7 @@ mighty_node:
 
         # --- Ground Robot Planning ---
         ground_robot_L_min: 2.0                         # [m] Lookahead distance for point A (planning start point)
-        ground_robot_v_max: 2.0                         # [m/s] Max linear velocity for ground robot
+        ground_robot_v_max: 1.5                         # [m/s] Max linear velocity for ground robot
         ground_robot_w_max: 1.0                         # [rad/s] Max angular velocity for smooth tracking
 
         # --- Pure Pursuit Controller ---
@@ -91,22 +91,26 @@ mighty_node:
 
         # --- Social Avoidance ---
         social_avoidance_enabled: true                 # [-] Enable social avoidance near dynamic agents
-        social_avoidance_d_trigger: 1.5                 # [m] Threat trigger distance
+        social_avoidance_d_trigger: 1.50                 # [m] Threat trigger distance
         social_avoidance_min_repulsion_norm: 0.1        # [-] Minimum summed repulsion norm to trigger avoidance
         social_avoidance_h: 1.0                         # [m] Evasion step distance
+        social_avoidance_pedestrian_mu_threshold: 0.75  # [-] If CV mode probability drops below this, treat as pedestrian for social avoidance
 
         # --- Social Heat Map ---
-        dynamic_heat_enabled: true                    # [-] Disable dynamic heat for ground robot
+        dynamic_heat_enabled: true                       # [-] Enable dynamic heat map for soft social costs
         dynamic_heat_use_social: true                  # [-] Use social dynamic heat model (dynamic_heat_enabled must be true)
+        dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
+        heat_Hmax: 100.0                                  # [-] Maximum dynamic heat value
         social_heat_A0: 30.0                            # [-] Initial social heat amplitude
         social_heat_dA: 0.8                             # [-] Amplitude decay per second
-        social_heat_sigma_x0: 0.5                       # [m] Initial longitudinal spread
-        social_heat_sigma_y0: 0.3                       # [m] Initial lateral spread
-        social_heat_d_sigma: 0.25                       # [m/s] Gaussian spread growth rate
+        social_heat_sigma_x0: 0.80                       # [m] Initial longitudinal spread
+        social_heat_sigma_y0: 0.30                       # [m] Initial lateral spread
+        social_heat_d_sigma: 0.30                       # [m/s] Gaussian spread growth rate
+        social_heat_r0: 0.60                            # [m] Forbidden radius
         social_heat_d_r0: 0.06                          # [m/s] Hard-collision radius decay
-        social_heat_robot_radius_m: 0.0                # [m] Robot radius for collision radius inflation
-        social_heat_delta_x: 0.2                        # [m] Social Gaussian longitudinal shift
-        social_heat_delta_y: 0.15                       # [m] Social Gaussian lateral shift
+        social_heat_robot_radius_m: 0.0                 # [m] Robot radius for collision radius inflation
+        social_heat_delta_x: 0.15                        # [m] Social Gaussian longitudinal shift
+        social_heat_delta_y: 0.1                       # [m] Social Gaussian lateral shift
 
         # =====================================================================
         # [TUNE] — Adjust for performance / behavior trade-offs
@@ -124,7 +128,7 @@ mighty_node:
         goal_seen_radius: 1.0                           # [m] Distance to stop replanning
 
         # --- L-BFGS Optimization Weights ---
-        dynamic_weight: 1e+3                            # [-] Dynamic obstacle avoidance weight
+        dynamic_weight: 1e+4                            # [-] Dynamic obstacle avoidance weight
         time_weight: 8e+2                               # [-] Time cost weight
         stat_weight: 0.0                               # [-] Static obstacle weight
         jerk_weight: 1e+4                               # [-] Jerk smoothness weight
@@ -141,7 +145,7 @@ mighty_node:
         # --- Dynamic Obstacle Heat (soft costs) ---
         heat_alpha0: 0.1                                # [-] Weight for reachability blob (smaller for ground robot)
         heat_alpha1: 1.5                                # [-] Weight for trajectory tube
-        heat_Hmax: 5.0                                  # [-] Maximum dynamic heat value
+        # heat_Hmax: 5.0                                  # [-] Maximum dynamic heat value
         dyn_base_inflation_m: 0.2                       # [m] Base inflation for dynamic obstacle bboxes
         dyn_heat_tube_radius_m: 1.0                     # [m] Heat corridor radius (tighter for ground robot)
 
@@ -177,18 +181,18 @@ mighty_node:
         free_start_factor: 1.0                          # [-] Radius factor for start freeing
         use_free_goal: false                            # [-] Free the goal voxel if occupied
         free_goal_factor: 2.0                           # [-] Radius factor for goal freeing
-        global_planner_heuristic_weight: 2.0             # [-] A* heuristic weight (higher = greedier)
-        heat_weight: 1.0                                # [-] Overall heat map weight in A* cost
+        global_planner_heuristic_weight: 3.0             # [-] A* heuristic weight (higher = greedier)
+        heat_weight: 20.0                                # [-] Overall heat map weight in A* cost
         max_dist_vertexes: 0.5                          # [m] Max distance between path vertices
-        w_unknown: 1.0                                  # [-] Cost weight for unknown cells
+        w_unknown: 30.0                                  # [-] Cost weight for unknown cells
         w_align: 0.0                                    # [-] Cost weight for alignment with initial velocity
         decay_len_cells: 100.0                          # [-] Decay length for alignment cost
         w_side: 0.0                                     # [-] Cost weight for lateral tie-breaking
 
         # --- Heat Map Internals ---
         use_heat_map: true                              # [-] Master toggle for heat map
-        dynamic_heat_enabled: true                      # [-] Enable dynamic heat for ground robot
-        dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
+        # dynamic_heat_enabled: true                    # [-] Disable dynamic heat for ground robot
+        # dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
         dynamic_as_occupied_future: false                # [-] Mark obstacle's future cells as hard-occupied
         heat_p: 2                                       # [-] Reachability blob falloff power
         heat_q: 2                                       # [-] Trajectory tube falloff power
@@ -225,7 +229,7 @@ mighty_node:
         # --- L-BFGS Solver Internals ---
         spline_degree: 3                                # [-] Hermite spline degree (3=cubic, 5=quintic)
         dc: 0.01                                        # [s] Interpolation timestep
-        pos_anchor_weight: 0.0                         # [-] Position anchor weight (penalizes deviation from HGP waypoints)
+        pos_anchor_weight: 1e+2                         # [-] Position anchor weight (penalizes deviation from HGP waypoints)
         dyn_constr_bodyrate_weight: 0.0                 # [-] Body rate constraint weight
         dyn_constr_tilt_weight: 0.0                     # [-] Tilt constraint weight
         dyn_constr_thrust_weight: 0.0                   # [-] Thrust constraint weight
@@ -332,11 +336,11 @@ mighty_node:
 
         # --- Trajectory Publishing ---
         trajectory_downsample_points: 500               # [-] Number of points to downsample trajectory to
-        use_trajectory_tracker: false                    # [-] Use FF+FB trajectory tracker instead of pure pursuit
+        use_trajectory_tracker: true                    # [-] Use FF+FB trajectory tracker instead of pure pursuit
         mpc_path_spacing: 0.2                           # [m] Spacing between waypoints in MPC path
 
         # --- Debug ---
-        global_planner_verbose: false                   # [-] Global planner debug output
+        global_planner_verbose: true                   # [-] Global planner debug output
         debug_verbose: false                            # [-] General debug output
         closed_form_traj_verbose: false                 # [-] Closed-form trajectory debug
         verbose_computation_time: false                 # [-] Print computation times
@@ -355,7 +359,7 @@ mighty_node:
         # Detects unexplored frontiers in the 2D occupancy grid and autonomously
         # drives to them. A manual term_goal preempts; exploration resumes after
         # the manual goal is reached. See plan: snazzy-moseying-donut.md
-        exploration.enabled: true                                # [-] Master switch
+        exploration.enabled: false                              # [-] Master switch
         exploration.select_rate_hz: 1.0                          # [Hz] Goal-selection tick
         exploration.default_goal_z: 0.0                          # [m]  z for issued exploration goals
         exploration.detector.cluster_min_cells: 6                # [cells] drop tiny frontier clusters
@@ -367,7 +371,7 @@ mighty_node:
         # seeds outside the box are dropped, so the robot only receives
         # exploration goals inside [min_x,max_x] x [min_y,max_y]. RViz shows
         # the box as a yellow rectangle with the label "Exploration Area".
-        exploration.bounds.enabled: true                         # [-]  master switch
+        exploration.bounds.enabled: false                         # [-]  master switch
         exploration.bounds.min_x: -7.0                          # [m]
         exploration.bounds.max_x:  25.0                          # [m]
         exploration.bounds.min_y: -27.0                          # [m]

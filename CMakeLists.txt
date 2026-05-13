@@ -41,6 +41,7 @@ find_package(tf2_eigen REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(vision_msgs REQUIRED)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}")
 
@@ -72,6 +73,11 @@ add_executable(pure_pursuit src/mighty/pure_pursuit.cpp)
 target_link_libraries(pure_pursuit)
 ament_target_dependencies(pure_pursuit rclcpp dynus_interfaces geometry_msgs visualization_msgs)
 
+# Add FF+FB controller for ground robot for spatial temporal planner
+add_executable(ff_fb_controller src/mighty/ff_fb_controller.cpp)
+target_link_libraries(ff_fb_controller)
+ament_target_dependencies(ff_fb_controller rclcpp dynus_interfaces geometry_msgs visualization_msgs)
+
 add_executable(trajectory_tracker src/mighty/trajectory_tracker.cpp)
 target_link_libraries(trajectory_tracker)
 ament_target_dependencies(trajectory_tracker rclcpp dynus_interfaces geometry_msgs visualization_msgs)
@@ -94,6 +100,22 @@ ament_target_dependencies(test_lbfgs_solver rclcpp example_interfaces dynus_inte
 add_executable(convert_velodyne_to_ros_time src/mighty/convert_velodyne_to_ros_time.cpp)
 target_link_libraries(convert_velodyne_to_ros_time)
 ament_target_dependencies(convert_velodyne_to_ros_time rclcpp rclcpp_components visualization_msgs dynus_interfaces sensor_msgs gazebo_msgs sensor_msgs tf2 tf2_ros nav_msgs)
+
+# Add the convert vicon to obstacle executable
+add_executable(convert_vicon_to_obstacles src/mighty/convert_vicon_to_obstacles.cpp)
+target_link_libraries(convert_vicon_to_obstacles)
+ament_target_dependencies(convert_vicon_to_obstacles
+  rclcpp
+  geometry_msgs
+  vision_msgs
+  dynus_interfaces
+  visualization_msgs
+  Eigen3
+  std_msgs
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
+)
 
 # For dynamic obstacles in Gazebo
 add_library(move_model SHARED src/sim/move_model.cpp)
@@ -128,6 +150,28 @@ ament_target_dependencies(dynamic_pedestrian_node
   nav_msgs
 )
 
+add_executable(IMM_obstacle_tracker_node src/tracker/IMM_obstacle_tracker_node.cpp)
+ament_target_dependencies(IMM_obstacle_tracker_node
+  rclcpp
+  geometry_msgs
+  visualization_msgs
+  dynus_interfaces
+  vision_msgs
+  std_msgs
+  tf2
+  tf2_geometry_msgs
+)
+
+add_executable(fake_sim_perception_node src/tracker/fake_sim_perception_node.cpp)
+ament_target_dependencies(fake_sim_perception_node
+  rclcpp
+  gazebo_msgs
+  nav_msgs
+  visualization_msgs
+  vision_msgs
+  std_msgs
+)
+
 # install for launch and config files
 install(DIRECTORY
 launch
@@ -145,9 +189,13 @@ install(TARGETS
   fake_sim
   pure_pursuit
   trajectory_tracker
+  ff_fb_controller
+  IMM_obstacle_tracker_node
   convert_odom_to_state
   convert_vicon_to_state
   convert_velodyne_to_ros_time
+  convert_vicon_to_obstacles
+  fake_sim_perception_node
   dynamic_forest_node
   dynamic_pedestrian_node
   DESTINATION lib/${PROJECT_NAME}
@@ -174,6 +222,7 @@ install(PROGRAMS
   scripts/repub_rviz_2Dgoal.py
   scripts/frame_align_publisher.py
   scripts/formation_viz_node.py
+  scripts/fixed_state_publisher.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -4,19 +4,13 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /Common1/TF1
         - /Common1/TF1/Frames1
         - /Common1/TF1/Tree1
         - /ST011
-        - /ST011/Planning1
-        - /ST011/Planning1/ST01 DGP path1
         - /ST011/Planning1/ST01 DGP path1/Topic1
-        - /ST011/Planning1/ST01 DGP Free Path1
         - /ST011/Planning1/ST01 DGP Free Path1/Topic1
-        - /ST011/Mapping1
-        - /PointCloud21/Topic1
-        - /PointCloud22/Topic1
-        - /PointCloud23/Topic1
-        - /PointCloud24
+        - /2D Ground Occupied1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 530
   - Class: rviz_common/Selection
@@ -36,7 +30,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: PointCloud2
+    SyncSource: 2D Ground Occupied
 Visualization Manager:
   Class: ""
   Displays:
@@ -65,6 +59,8 @@ Visualization Manager:
           Frame Timeout: 15
           Frames:
             All Enabled: false
+            Lucas6:
+              Value: false
             ST01/base_link:
               Value: true
             ST01/lidar:
@@ -74,6 +70,8 @@ Visualization Manager:
             ST01/map:
               Value: true
             ST01/odom:
+              Value: true
+            world:
               Value: true
           Marker Scale: 5
           Name: TF
@@ -88,6 +86,9 @@ Visualization Manager:
                     {}
                   ST01/livox_frame:
                     {}
+              world:
+                Lucas6:
+                  {}
           Update Interval: 0
           Value: true
         - Class: rviz_default_plugins/Marker
@@ -197,118 +198,7 @@ Visualization Manager:
               Enabled: true
               Name: ST01 Other Agent Traj (transformed)
               Namespaces:
-                other_agent_traj_100: true
-                other_agent_traj_101: true
-                other_agent_traj_104: true
-                other_agent_traj_105: true
-                other_agent_traj_106: true
-                other_agent_traj_108: true
-                other_agent_traj_114: true
-                other_agent_traj_115: true
-                other_agent_traj_116: true
-                other_agent_traj_117: true
-                other_agent_traj_119: true
-                other_agent_traj_120: true
-                other_agent_traj_122: true
-                other_agent_traj_125: true
-                other_agent_traj_126: true
-                other_agent_traj_127: true
-                other_agent_traj_128: true
-                other_agent_traj_130: true
-                other_agent_traj_131: true
-                other_agent_traj_132: true
-                other_agent_traj_133: true
-                other_agent_traj_135: true
-                other_agent_traj_136: true
-                other_agent_traj_140: true
-                other_agent_traj_142: true
-                other_agent_traj_143: true
-                other_agent_traj_144: true
-                other_agent_traj_145: true
-                other_agent_traj_146: true
-                other_agent_traj_147: true
-                other_agent_traj_148: true
-                other_agent_traj_150: true
-                other_agent_traj_151: true
-                other_agent_traj_155: true
-                other_agent_traj_156: true
-                other_agent_traj_157: true
-                other_agent_traj_158: true
-                other_agent_traj_160: true
-                other_agent_traj_161: true
-                other_agent_traj_162: true
-                other_agent_traj_167: true
-                other_agent_traj_168: true
-                other_agent_traj_175: true
-                other_agent_traj_176: true
-                other_agent_traj_178: true
-                other_agent_traj_181: true
-                other_agent_traj_182: true
-                other_agent_traj_187: true
-                other_agent_traj_188: true
-                other_agent_traj_189: true
-                other_agent_traj_190: true
-                other_agent_traj_191: true
-                other_agent_traj_193: true
-                other_agent_traj_196: true
-                other_agent_traj_198: true
-                other_agent_traj_199: true
-                other_agent_traj_201: true
-                other_agent_traj_205: true
-                other_agent_traj_207: true
-                other_agent_traj_208: true
-                other_agent_traj_209: true
-                other_agent_traj_210: true
-                other_agent_traj_211: true
-                other_agent_traj_212: true
-                other_agent_traj_214: true
-                other_agent_traj_215: true
-                other_agent_traj_216: true
-                other_agent_traj_217: true
-                other_agent_traj_218: true
-                other_agent_traj_219: true
-                other_agent_traj_220: true
-                other_agent_traj_221: true
-                other_agent_traj_222: true
-                other_agent_traj_224: true
-                other_agent_traj_226: true
-                other_agent_traj_227: true
-                other_agent_traj_228: true
-                other_agent_traj_230: true
-                other_agent_traj_52: true
-                other_agent_traj_53: true
-                other_agent_traj_54: true
-                other_agent_traj_55: true
-                other_agent_traj_56: true
-                other_agent_traj_57: true
-                other_agent_traj_59: true
-                other_agent_traj_60: true
-                other_agent_traj_62: true
-                other_agent_traj_63: true
-                other_agent_traj_65: true
-                other_agent_traj_66: true
-                other_agent_traj_68: true
-                other_agent_traj_69: true
-                other_agent_traj_70: true
-                other_agent_traj_71: true
-                other_agent_traj_72: true
-                other_agent_traj_73: true
-                other_agent_traj_74: true
-                other_agent_traj_75: true
-                other_agent_traj_76: true
-                other_agent_traj_77: true
-                other_agent_traj_78: true
-                other_agent_traj_80: true
-                other_agent_traj_83: true
-                other_agent_traj_84: true
-                other_agent_traj_86: true
-                other_agent_traj_87: true
-                other_agent_traj_88: true
-                other_agent_traj_89: true
-                other_agent_traj_90: true
-                other_agent_traj_92: true
-                other_agent_traj_93: true
-                other_agent_traj_95: true
+                other_agent_traj_0: true
               Topic:
                 Depth: 5
                 Durability Policy: Volatile
@@ -479,7 +369,7 @@ Visualization Manager:
                 Value: /ST01/dynamic_map_marker
               Value: false
             - Class: rviz_default_plugins/MarkerArray
-              Enabled: true
+              Enabled: false
               Name: ST01 Free Map Array
               Namespaces:
                 {}
@@ -489,7 +379,7 @@ Visualization Manager:
                 History Policy: Keep Last
                 Reliability Policy: Best Effort
                 Value: /ST01/free_map_marker
-              Value: true
+              Value: false
             - Class: rviz_default_plugins/MarkerArray
               Enabled: false
               Name: ST01 Unknown Map Array
@@ -539,8 +429,8 @@ Visualization Manager:
             - Alpha: 0.10000000149011612
               Autocompute Intensity Bounds: false
               Autocompute Value Bounds:
-                Max Value: 8.050000190734863
-                Min Value: -0.4869999885559082
+                Max Value: 2.550650119781494
+                Min Value: -1.0553172826766968
                 Value: true
               Axis: Z
               Channel Name: intensity
@@ -713,7 +603,7 @@ Visualization Manager:
               Enabled: true
               Name: ST01 tracked obstacles
               Namespaces:
-                "": true
+                predictions: true
               Topic:
                 Depth: 5
                 Durability Policy: Volatile
@@ -788,83 +678,15 @@ Visualization Manager:
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
-      Color Transformer: Intensity
+      Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 4096
+      Max Intensity: 1
       Min Color: 0; 0; 0
-      Min Intensity: 0
-      Name: PointCloud2
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.10000000149011612
-      Style: Flat Squares
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /ST01/occupancy_grid
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: -999999
-      Min Color: 0; 0; 0
-      Min Intensity: 999999
-      Name: PointCloud2
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.009999999776482582
-      Style: Flat Squares
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ST01/ground_2d_heat
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: -999999
-      Min Color: 0; 0; 0
-      Min Intensity: 999999
-      Name: PointCloud2
+      Min Intensity: 1
+      Name: 2D Ground Occupied
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
@@ -879,18 +701,6 @@ Visualization Manager:
         Value: /ST01/ground_2d_occupied
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ST01/dynamic_map_marker
       Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
@@ -910,7 +720,7 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: PointCloud2
+      Name: Dynamic Grid
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
@@ -930,8 +740,8 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: true
-      Name: Map
+      Enabled: false
+      Name: 2D ESDF Map
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -946,7 +756,41 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /ST01/esdf_2d_topic_updates
       Use Timestamp: false
-      Value: true
+      Value: false
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 50
+      Min Color: 0; 0; 0
+      Min Intensity: 0.0026334014255553484
+      Name: 2D Ground Heat
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.05000000074505806
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /ST01/ground_2d_heat
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -993,7 +837,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 20.94635772705078
+      Distance: 24.085113525390625
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -1008,10 +852,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7597963213920593
+      Pitch: 0.9497965574264526
       Target Frame: ST01/map
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.642916679382324
+      Yaw: 4.707924842834473
     Saved: ~
 Window Geometry:
   Displays:

@@ -180,7 +180,7 @@ def generate_launch_description():
                 PathJoinSubstitution([FindPackageShare('mighty'), 'launch', 'dyn_obstacles_pedestrians.launch.py'])
             ),
             launch_arguments={
-                'num_obstacles': '10',
+                'num_obstacles': '15',
                 'env_value': env_value,
                 'seed': '25',
             }.items()

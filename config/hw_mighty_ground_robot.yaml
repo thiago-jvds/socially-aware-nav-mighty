@@ -44,7 +44,7 @@ mighty_node:
         # --- Vehicle Dynamic Limits ---
         v_max: 0.5                                      # [m/s]   Max velocity
         a_max: 1.0                                      # [m/s^2] Max acceleration
-        j_max: 2.0                                     # [m/s^3] Max jerk
+        j_max: 2.0                                      # [m/s^3] Max jerk
         w_max: 1.0                                      # [rad/s] Max yaw rate (~4.0 for hardware)
         drone_bbox: [0.6, 0.6, 0.5]                     # [m] Vehicle bounding box
 
@@ -66,7 +66,7 @@ mighty_node:
         y_max: 1000.0                                   # [m] Map y upper bound
         z_min: -0.4                                     # [m] Min altitude (matches global mapper z_ground)
         z_max: 0.5                                      # [m] Max altitude (must include real obstacle heights from lidar)
-        mighty_map_res: 0.15                             # [m] Voxel map resolution (coarser for ground robot)
+        mighty_map_res: 0.15                            # [m] Voxel map resolution (coarser for ground robot)
 
         # --- Goal ---
         force_goal_z: true                              # [-] Force goal to a fixed height (RViz GUI goals have z=0)

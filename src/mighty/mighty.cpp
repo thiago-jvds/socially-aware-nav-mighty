@@ -941,12 +941,17 @@ bool MIGHTY::generateGlobalPath(vec_Vecf<3>& global_path, double current_time,
 
   Vec3f start_dir_hint(dir_hint.x(), dir_hint.y(), dir_hint.z());
 
+  if (par_.global_planner == "6d_planner"){
+    start_dir_hint = Vec3f(local_A.vel[0], local_A.vel[1], 0.0);
+  }
+
   // Solve HGP
   MyTimer timer_solve(true);
   vec_Vecf<3> raw_global_path;
+  std::vector<double> v_cmds_out, w_cmds_out, yaws_out, xs_out, ys_out;  // for ground robot spatial-temporal path output
   if (!hgp_manager_.solveHGP(local_A.pos, start_dir_hint, local_G.pos, final_g_,
                              par_.global_planner_heuristic_weight, A_time, global_path,
-                             raw_global_path)) {
+                             raw_global_path, v_cmds_out, w_cmds_out, yaws_out, xs_out, ys_out)) {
     if (par_.debug_verbose)
       printf("[TIMING]   HGP solve (FAILED): %.2f ms\n", timer_solve.getElapsedMicros() / 1000.0);
     hgp_failure_count_++;
@@ -955,6 +960,17 @@ bool MIGHTY::generateGlobalPath(vec_Vecf<3>& global_path, double current_time,
   }
   if (par_.debug_verbose)
     printf("[TIMING]   HGP solve: %.2f ms\n", timer_solve.getElapsedMicros() / 1000.0);
+
+  if (par_.vehicle_type == "ground_robot" && par_.global_planner == "6d_planner"){
+    {
+      std::lock_guard<std::mutex> lock(mtx_spatial_temporal_cmds_);
+      v_cmds_ = v_cmds_out;
+      w_cmds_ = w_cmds_out;
+      yaws_ = yaws_out;
+      xs_ = xs_out;
+      ys_ = ys_out;
+    }
+  }
 
   // Bend pre-alignment (ground robot only). Detects sharp bends on the raw
   // A* path using a windowed direction average (robust to resample phase),
@@ -1442,6 +1458,47 @@ void MIGHTY::getState(state& state) {
 // ----------------------------------------------------------------------------
 
 /**
+ * @brief Gets the current halt.
+ * @param to_halt &bool: Output current halt.
+ */
+void MIGHTY::getHalt(bool& to_halt) {
+  std::lock_guard<std::mutex> lock(mtx_halt_);
+  to_halt = to_halt_;
+}
+
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief Sets the current halt.
+ * @param to_halt bool: Input current halt.
+ */
+void MIGHTY::setHalt(bool to_halt) {
+  std::lock_guard<std::mutex> lock(mtx_halt_);
+  to_halt_ = to_halt;
+}
+
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief Gets the current v_cmds and w_cmds for ground robots
+ * @param v_cmds std::vector<double>&: Output current v_cmds
+ * @param w_cmds std::vector<double>&: Output current w_cmds
+ * @param yaws std::vector<double>&: Output current yaws
+ * @param xs std::vector<double>&: Output current x coordinates
+ * @param ys std::vector<double>&: Output current y coordinates
+ */
+void MIGHTY::getSpatialTemporalPath(std::vector<double>& v_cmds, std::vector<double>& w_cmds, std::vector<double>& yaws, std::vector<double>& xs, std::vector<double>& ys) {
+  std::lock_guard<std::mutex> lock(mtx_spatial_temporal_cmds_);
+  v_cmds = v_cmds_;
+  w_cmds = w_cmds_;
+  yaws = yaws_;
+  xs = xs_;
+  ys = ys_;
+}
+
+// ----------------------------------------------------------------------------
+
+/**
  * @brief Gets the last plan state
  * @param state &state: Output last plan state
  */
@@ -1735,6 +1792,7 @@ void MIGHTY::getDesiredYaw(state& next_goal) {
       // std::cout << "diff1= " << diff << std::endl;
       break;
     case DroneStatus::SOCIAL_AVOIDING:
+    {
       // Face toward the hold position unless we are too close (atan2 becomes noisy).
       double dx = p_wait_.x() - next_goal.pos[0];
       double dy = p_wait_.y() - next_goal.pos[1];
@@ -1748,6 +1806,7 @@ void MIGHTY::getDesiredYaw(state& next_goal) {
       desired_yaw = atan2(dy, dx);
       diff = desired_yaw - previous_yaw_;
       break;
+    }
     case DroneStatus::TRAVELING:
     case DroneStatus::GOAL_SEEN:
       desired_yaw =
@@ -2243,7 +2302,32 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
 
   const double lookahead_window = 8.0; // [s]
   const double lookahead_step = 0.5;   // [s]
+  const double d_close = 0.5;           // [m] consider "close" obstacles for hold position restoration
   const double d_trigger = par_.social_avoidance_d_trigger;
+
+  auto isPedestrianErratic = [&](const std::shared_ptr<dynTraj>& traj) -> bool {
+    if (!traj || traj->mode != dynTraj::Mode::Piecewise || traj->pwp.times.size() < 2)
+      return false;
+
+    // Check for CV prob
+    if (traj->mu[0] < par_.social_avoidance_pedestrian_mu_threshold)
+      return true;
+
+    return false;
+  };
+
+  auto shouldTriggerThreat = [&](const std::shared_ptr<dynTraj>& traj) -> bool {
+    if (!traj)
+      return false;
+
+    // Policy:
+    // - use_mu == false -> trigger by distance only
+    // - use_mu == true  -> require pedestrian erratic condition as well
+    if (!traj->use_mu)
+      return true;
+
+    return isPedestrianErratic(traj);
+  };
 
   auto isPointThreatened = [&](const Eigen::Vector3d &pt, bool lookahead = true) -> bool {
     for (const auto &traj : local_trajs)
@@ -2252,7 +2336,7 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
         continue;
 
       Eigen::Vector3d p_now = traj->eval(current_time);
-      if ((pt - p_now).norm() < d_trigger)
+      if ((pt - p_now).norm() < d_close)
         return true;
 
       if (!lookahead)
@@ -2267,7 +2351,7 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
       for (double tau = lookahead_step; tau <= max_tau; tau += lookahead_step)
       {
         Eigen::Vector3d p_pred = traj->eval(current_time + tau);
-        if ((pt - p_pred).norm() < d_trigger)
+        if ((pt - p_pred).norm() < d_trigger && shouldTriggerThreat(traj))
           return true;
       }
     }
@@ -2300,60 +2384,25 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
       changeDroneStatus(DroneStatus::SOCIAL_AVOIDING);
     }
 
-    Eigen::Vector3d direction(std::cos(previous_yaw_), std::sin(previous_yaw_), 0.0);
-
-    Eigen::Vector3d p_evasion;
-    p_evasion[2] = local_state.pos[2];
     auto is_occupied = [&](const Eigen::Vector3d &p) {
       return checkIfPointOccupied(Vec3f(p[0], p[1], p[2]));
     };
 
-    bool force_halt = false;
+    const Eigen::Vector3d direction = n_total.normalized();
+    Eigen::Vector3d p_evasion = local_state.pos + par_.social_avoidance_h * direction;
+    p_evasion[2] = local_state.pos[2];
 
-    const std::array<double, 7> angle_offsets = {
-        M_PI / 6.0, -M_PI / 6.0, // +30, -30
-        M_PI / 3.0, -M_PI / 3.0, // +60, -60
-        M_PI / 2.0, -M_PI / 2.0, // +90, -90
-        M_PI,
-    };
-    bool found_safe = false;
-    for (double a : angle_offsets)
-    {
-      Eigen::Vector3d cand_dir(direction[0] * std::cos(a) - direction[1] * std::sin(a),
-                               direction[0] * std::sin(a) + direction[1] * std::cos(a), 0.0);
-      if (cand_dir.norm() < 1e-6)
-        continue;
-      cand_dir.normalize();
-
-      Eigen::Vector3d cand = local_state.pos + par_.social_avoidance_h * cand_dir;
-      cand[2] = local_state.pos[2];
-
-      if (!isPointThreatened(cand, true) && !is_occupied(cand))
-      {
-        p_evasion = cand;
-        found_safe = true;
-        std::cout << "[social_avoidance] Safe evasion point found at angle: " << a * 180.0 / M_PI << " degrees" << std::endl;
-        break;
-      }
-    }
-
-    if (!found_safe)
-    {
-      std::cout << "[social_avoidance] No safe evasion point found, forcing halt" << std::endl;
-      p_evasion = local_state.pos;
-      force_halt = true;
-    }
+    const bool force_halt = is_occupied(p_evasion) 
+            || isPointThreatened(p_evasion, true)
+            || isPointThreatened(local_state.pos, false);
 
     if (force_halt)
     {
-      state halt_goal = local_state;
-      halt_goal.vel.setZero();
-      halt_goal.accel.setZero();
-      halt_goal.jerk.setZero();
-      setGterm(halt_goal);
-
-      std::lock_guard<std::mutex> lock(mtx_G_);
-      G_.pos = local_state.pos;
+      std::cout << "[social_avoidance] Forcing halt. "  
+      << "is_occupied: " << is_occupied(p_evasion)
+      << " isPointThreatened p_evasion: " << isPointThreatened(p_evasion, true)
+      << " isPointThreatened local_state.pos: " << isPointThreatened(local_state.pos, false)
+      << std::endl;
     }
     else
     {
@@ -2365,10 +2414,14 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
       G_.pos = mighty_utils::projectPointToSphere(local_state.pos, p_evasion, par_.horizon);
     }
 
+    setHalt(force_halt);
+    
     return true;
   }
   else if (drone_status_ == DroneStatus::SOCIAL_AVOIDING)
   {
+    setHalt(false);
+
     if (!social_hold_goal_valid_)
       return false;
 
@@ -2386,6 +2439,8 @@ bool MIGHTY::checkSocialAvoidance(double current_time)
               << social_hold_goal_.pos.z() << ")" << std::endl;
     return true;
   }
+
+  setHalt(false);
 
   return false;
 }

@@ -28,6 +28,16 @@ def _as(context, name, cast, default):
         raise RuntimeError(f"[dyn_obstacles] Argument '{name}' expected {cast.__name__}, got '{s}'")
 
 
+def _as_bool(context, name, default=False):
+    raw = LaunchConfiguration(name).perform(context)
+    if raw is None:
+        return default
+    s = raw.strip().lower()
+    if s == '':
+        return default
+    return s in ['true', '1', 'yes', 'on', 't']
+
+
 def get_human_trajectory(
     traj_mode, x, y, z, speed, x_min=0, x_max=10, y_min=0, y_max=10
 ):
@@ -89,6 +99,9 @@ def generate_human_entities(context):
     num_obstacles = _as(context, "num_obstacles", int, 10)
     env_value = _as(context, "env_value", str, "unknown")
     seed = _as(context, "seed", int, 42)
+    use_sim_time = _as_bool(context, "use_sim_time", True)
+    move_models = _as_bool(context, "move_models", True)
+    publish_tf = _as_bool(context, "publish_tf", True)
     random.seed(seed)
 
     if env_value == "empty_corridor":
@@ -225,7 +238,9 @@ def generate_human_entities(context):
             traj_y_min = -7.0
             traj_y_max = 7.0
 
-            cur_loc = i * 10.0 + traj_x_min
+            gap = (traj_x_max - traj_x_min) / (num_obstacles if num_obstacles > 0 else 1)
+
+            cur_loc = i * gap + traj_x_min
             if cur_loc > traj_x_max:
                 continue
 
@@ -234,7 +249,7 @@ def generate_human_entities(context):
             traj_mode = "ONE_WAY_Y"
 
         elif env_value == "social_passing":
-            traj_x_max = 95.0
+            traj_x_max = 200.0
             traj_x_min = 5.0
             traj_y_min = -5.0
             traj_y_max = 5.0
@@ -289,6 +304,7 @@ def generate_human_entities(context):
                 ' traj_y:=', traj_y_str,
                 ' traj_z:=', traj_z_str,
                 ' robot_name:=', human_name,
+                ' enable_motion_plugin:=', str(move_models).lower(),
             ]),
             value_type=str
         )
@@ -301,6 +317,7 @@ def generate_human_entities(context):
             parameters=[
                 {
                     "robot_description": robot_description,
+                    "use_sim_time": use_sim_time,
                     'frame_prefix': human_name + '/'
                 }
             ],
@@ -341,6 +358,10 @@ def generate_human_entities(context):
                 "publish_rate_hz": 50.0,
                 "global_frame": "map",
                 "base_link_name": "base_link",
+                "move_models": move_models,
+                "publish_tf": publish_tf,
+                "use_sim_time": use_sim_time,
+                "model_state_reference_frame": "world",
             }
         ],
     )
@@ -356,6 +377,10 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("num_obstacles", default_value="10"),
             DeclareLaunchArgument("env_value", default_value="unknown"),
+            DeclareLaunchArgument("seed", default_value="42"),
+            DeclareLaunchArgument("use_sim_time", default_value="true"),
+            DeclareLaunchArgument("move_models", default_value="false"),
+            DeclareLaunchArgument("publish_tf", default_value="true"),
         ]
     )
 

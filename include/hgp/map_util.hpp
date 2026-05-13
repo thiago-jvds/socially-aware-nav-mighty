@@ -78,6 +78,7 @@ class MapUtil {
         social_heat_sigma_x0_(other.social_heat_sigma_x0_),
         social_heat_sigma_y0_(other.social_heat_sigma_y0_),
         social_heat_d_sigma_(other.social_heat_d_sigma_),
+        social_heat_r0_(other.social_heat_r0_),
         social_heat_d_r0_(other.social_heat_d_r0_),
         social_heat_robot_radius_m_(other.social_heat_robot_radius_m_),
         social_heat_delta_x_(other.social_heat_delta_x_),
@@ -260,7 +261,7 @@ class MapUtil {
     //
     //     Now using bounding box dimensions instead of spherical radius.
     if (dynamic_as_occupied_current_) {
-      const double base_inflation = std::max((double)dyn_base_inflation_m_, (double)inflation);
+      const double base_inflation = (double)dyn_base_inflation_m_;
       if (base_inflation >= 0.0 && !obst_pos.empty()) {
         for (size_t k = 0; k < obst_pos.size(); ++k) {
           const auto& O = obst_pos[k];
@@ -636,13 +637,14 @@ class MapUtil {
 
   /** @brief Configure social dynamic heat model parameters. */
   void setSocialDynamicHeatParams(float A0, float dA, float sigma_x0, float sigma_y0,
-                                  float d_sigma, float d_r0, float robot_radius_m,
+                                  float d_sigma, float r0, float d_r0, float robot_radius_m,
                                   float delta_x, float delta_y) {
     social_heat_A0_ = std::max(0.0f, A0);
     social_heat_dA_ = std::max(0.0f, dA);
     social_heat_sigma_x0_ = std::max(1e-3f, sigma_x0);
     social_heat_sigma_y0_ = std::max(1e-3f, sigma_y0);
     social_heat_d_sigma_ = std::max(0.0f, d_sigma);
+    social_heat_r0_ = std::max(0.0f, r0);
     social_heat_d_r0_ = std::max(0.0f, d_r0);
     social_heat_robot_radius_m_ = std::max(0.0f, robot_radius_m);
     social_heat_delta_x_ = delta_x;
@@ -739,6 +741,65 @@ class MapUtil {
     if (heat_.empty()) return 0.0f;
     return *std::max_element(heat_.begin(), heat_.end());
   }
+
+  vec_Vecf<2> getTemporalMap() const {
+    vec_Vecf<2> grid;
+    if (temporal_maps_.empty()) return grid;
+
+    const int dimX = dim_(0);
+    const int dimY = dim_(1);
+
+    for (int x = 0; x < dimX; ++x) {
+      for (int y = 0; y < dimY; ++y) {
+        float max_val = 0.0f;
+        int time_samples = (int)std::ceil(time_horizon_ / time_res_);
+        for (int t = 0; t < time_samples; ++t) {
+          int idx = x + y * dimX + t * dim_xy_;
+          if (idx < (int)temporal_maps_.size()) {
+            max_val = std::max(max_val, temporal_maps_[idx]);
+          }
+        }
+        Eigen::Vector2f pos(origin_d_(0) + (x + 0.5f) * res_, origin_d_(1) + (y + 0.5f) * res_);
+        grid.push_back(pos);
+      }
+    }
+    return grid;
+  }
+
+  std::vector<float> getTemporalValues() const { return temporal_maps_; }
+
+  float getMaxTemporalMapValue() const {
+    if (temporal_maps_.empty()) return 0.0f;
+    return *std::max_element(temporal_maps_.begin(), temporal_maps_.end());
+  }
+
+  double getTemporalCost(int x, int y, int z, int t_idx) const {
+    const int temporal_steps = getTemporalNumSteps();
+
+    // Check if inbound for temporal map
+    if (temporal_maps_.empty() ||
+        x < 0 || x >= dim_(0) ||
+        y < 0 || y >= dim_(1) ||
+        z < 0 || z >= dim_(2) ||
+        t_idx < 0 || t_idx >= temporal_steps)
+      return 0.0f;
+
+    const int idx = x + y * dim_(0) + t_idx * dim_xy_;
+    if (idx >= 0 && idx < (int)temporal_maps_.size()) {
+      return temporal_maps_[idx];
+    } else {
+      return 0.0f;
+    }
+  }
+
+  float getTimeRes() const { return time_res_; }
+
+  // World-space map bounds configured from yaml parameters.
+  float getMapYMin() const { return y_map_min_; }
+  float getMapYMax() const { return y_map_max_; }
+  
+  int getTemporalNumSteps() const { return std::max(0, (int)std::ceil(time_horizon_ / time_res_)); }
+  float getTemporalWeight() const { return 1.0f; }
 
   /** @brief Precompute 3D grid offsets for a given inflation radius in cells.
    *  @param inflation_cells Number of cells to inflate in each dimension.
@@ -1451,6 +1512,7 @@ class MapUtil {
   float social_heat_sigma_x0_{2.0f};
   float social_heat_sigma_y0_{1.0f};
   float social_heat_d_sigma_{0.25f};
+  float social_heat_r0_{0.6f};
   float social_heat_d_r0_{0.06f};
   float social_heat_robot_radius_m_{0.0f};
   float social_heat_delta_x_{0.2f};
@@ -1676,6 +1738,9 @@ class MapUtil {
 
   inline void computeSocialDynamicHeat(const vec_Vecf<3>& obst_pos,
                                        const vec_Vecf<3>& obst_bbox, double traj_max_time) {
+    if (use_temporal_maps_) {
+      computeTemporalMaps(obst_pos, obst_bbox, traj_max_time);
+    }
     const size_t K = obst_pos.size();
     if (K == 0) return;
 
@@ -1706,7 +1771,7 @@ class MapUtil {
         hz = obst_bbox[k].z();
       }
       hk_list[k] = Eigen::Vector3f(hx, hy, hz);
-      r0_init_list[k] = 0.6f;
+      r0_init_list[k] = social_heat_r0_;
     }
 
     std::vector<Eigen::Vector3f> cj_flat(K * J);
@@ -1806,6 +1871,173 @@ class MapUtil {
       }
 
       heat_[idx] = std::max(heat_[idx], best);
+    }
+  }
+
+  inline void computeTemporalMaps(const vec_Vecf<3>& obst_pos, const vec_Vecf<3>& obst_bbox,
+                                  double traj_max_time) {
+    const size_t K = obst_pos.size();
+
+    // Setup space-time grid
+    int time_num_steps_ = std::ceil(time_horizon_ / time_res_);
+
+    // Allocate and clear the space-time grid (Size = Total 2D cells * Time steps)
+    // Initialize to 0.0 (free space)
+    temporal_maps_.assign(time_num_steps_ * dim_xy_, 0.0f);
+
+    if (K == 0) return;
+
+    const int dimX = dim_(0);
+    const int dimY = dim_(1);
+    const float inv_res = 1.0f / res_;
+
+    // ============= SOCIAL COST MODEL PARAMETERS =============
+    // Based on Gaussian distribution with displacement and time decays.
+    const float A_0 = social_heat_A0_;                // Initial amplitude
+    const float d_A = social_heat_dA_;                // Decay factor over time
+    const float sigma_x_0 = social_heat_sigma_x0_;    // Base std dev in front
+    const float sigma_y_0 = social_heat_sigma_y0_;    // Base std dev to sides
+    const float d_sigma = social_heat_d_sigma_;       // Linear increase over time
+    const float d_r0 = social_heat_d_r0_;             // Linear decrease in forbidden radius
+    const float robot_radius_m = social_heat_robot_radius_m_;
+    const float delta_x = social_heat_delta_x_;       // Forward displacement
+    const float delta_y = social_heat_delta_y_;       // Lateral displacement
+    // ========================================================
+
+    // Populate the obstacles with temporal-aware collision
+    for (size_t k = 0; k < K; ++k) {
+      // Base obstacle forbidden radius based on bounding box
+      float hx = (k < obst_bbox.size()) ? obst_bbox[k].x() : 0.4f;
+      float hy = (k < obst_bbox.size()) ? obst_bbox[k].y() : 0.4f;
+      float r0_init = std::max({0.4f, hx, hy});
+
+      for (int j = 0; j < time_num_steps_; ++j) {
+        float current_time = j * time_res_;
+
+        // Precompute predicted center and previous center for heading
+        Eigen::Vector3f cj = obst_pos[k].cast<float>();
+        Eigen::Vector3f cj_prev = cj;
+
+        if (k < dyn_pred_samples_.size() && !dyn_pred_samples_[k].empty()) {
+          if (j < (int)dyn_pred_samples_[k].size()) {
+            cj = dyn_pred_samples_[k][j].cast<float>();
+          } else {
+            cj = dyn_pred_samples_[k].back().cast<float>();
+          }
+
+          if (j > 0 && (j - 1) < (int)dyn_pred_samples_[k].size()) {
+            cj_prev = dyn_pred_samples_[k][j - 1].cast<float>();
+          }
+        }
+
+        // Estimate heading angle (theta) from movement
+        float theta = 0.0f;
+        float dist_moved = (cj - cj_prev).head<2>().norm();
+        if (dist_moved > 1e-3f) {
+          theta = std::atan2(cj.y() - cj_prev.y(), cj.x() - cj_prev.x());
+        } else if (k < dyn_pred_samples_.size() && dyn_pred_samples_[k].size() > 1) {
+          // Fallback to overall trajectory direction if stationary in this step
+          Eigen::Vector3f start = dyn_pred_samples_[k].front().cast<float>();
+          Eigen::Vector3f end = dyn_pred_samples_[k].back().cast<float>();
+          if ((end - start).head<2>().norm() > 1e-3f) {
+            theta = std::atan2(end.y() - start.y(), end.x() - start.x());
+          }
+        }
+
+        float cos_theta = std::cos(theta);
+        float sin_theta = std::sin(theta);
+
+        // ============= Temporal Evolution =============
+        float r0_t = std::max(0.0f, r0_init - d_r0 * current_time);
+        float A_t = std::max(0.0f, A_0 - d_A * current_time);
+        float sigma_x_t = sigma_x_0 + d_sigma * current_time;
+        float sigma_y_t = sigma_y_0 + d_sigma * current_time;
+
+        bool skip_soft = (A_t <= 1e-3f);
+        float var_x_2 = 2.0f * sigma_x_t * sigma_x_t;
+        float var_y_2 = 2.0f * sigma_y_t * sigma_y_t;
+
+        // Determine bounding box for grid processing (truncate Gaussian at ~3 sigma)
+        float max_sigma = std::max(sigma_x_t, sigma_y_t);
+        const float hard_collision_radius = r0_t + robot_radius_m;
+        float search_radius = hard_collision_radius + std::sqrt(delta_x * delta_x + delta_y * delta_y) +
+                              3.0f * max_sigma;
+
+        // Find grid bounding box covering all zones
+        int min_x = std::max(0, (int)std::floor((cj.x() - search_radius - origin_d_(0)) * inv_res));
+        int max_x = std::min(dimX - 1, (int)std::ceil((cj.x() + search_radius - origin_d_(0)) * inv_res));
+        int min_y = std::max(0, (int)std::floor((cj.y() - search_radius - origin_d_(1)) * inv_res));
+        int max_y = std::min(dimY - 1, (int)std::ceil((cj.y() + search_radius - origin_d_(1)) * inv_res));
+
+        // Rasterize with social cost structure
+        int time_offset = j * dim_xy_;
+        for (int y = min_y; y <= max_y; ++y) {
+          float cell_y = origin_d_(1) + (y + 0.5f) * res_;
+          float dy = cell_y - cj.y();
+
+          for (int x = min_x; x <= max_x; ++x) {
+            float cell_x = origin_d_(0) + (x + 0.5f) * res_;
+            float dx = cell_x - cj.x();
+
+            float dist_to_center = std::sqrt(dx * dx + dy * dy);
+            float cost = 0.0f;
+
+            // 1) Hard collision: robot disk intersects pedestrian forbidden disk.
+            // Minkowski-sum test in XY: dist(center_robot, center_ped) <= r_ped + r_robot.
+            if (dist_to_center <= hard_collision_radius) {
+              cost = -100.0f;
+            }
+            // 2) Soft Social Cost overlay
+            else if (!skip_soft && dist_to_center <= search_radius) {
+              // Rotate to align with heading
+              float dx_rot = dx * cos_theta + dy * sin_theta;
+              float dy_rot = -dx * sin_theta + dy * cos_theta;
+
+              // Apply social displacement
+              float x_soc = dx_rot - delta_x;
+              float y_soc = dy_rot - delta_y;
+
+              // Evaluate Gaussian with elliptical basis (wider spread in all directions)
+              float exponent = (x_soc * x_soc) / var_x_2 + (y_soc * y_soc) / var_y_2;
+              // Use smoother decay: max(0, 1 - exponent) creates linear falloff, blended with exp
+              // for smoothness
+              float soft_cost = A_t * std::max(0.0f, (1.0f - 0.5f * exponent)) * std::exp(-0.3f * exponent);
+
+              cost = soft_cost;
+            }
+
+            int spatial_idx = x + y * dimX + time_offset;
+            // Handle hard collisions (negative) vs soft costs (positive) separately
+            if (cost < 0.0f) {
+              // Hard collision always takes priority
+              temporal_maps_[spatial_idx] = cost;
+            } else if (temporal_maps_[spatial_idx] >= 0.0f && cost > 0.0f) {
+              // Both positive/zero: blend with max (take worst case)
+              temporal_maps_[spatial_idx] = std::max(temporal_maps_[spatial_idx], cost);
+            }
+            // else: existing is hard collision (negative), keep it unchanged
+          }
+        }
+      }
+    }
+  }
+
+  inline void projectDynamicHeatTo2DFrom3D(int dimX, int dimY, int dimZ) {
+    if (!dynamic_heat_enabled_ || heat_.empty() || heat_2d_.empty()) return;
+
+#pragma omp parallel for collapse(2) schedule(static)
+    for (int x = 0; x < dimX; ++x) {
+      for (int y = 0; y < dimY; ++y) {
+        float max_h = 0.0f;
+        for (int z = 0; z < dimZ; ++z) {
+          const size_t idx_3d =
+              static_cast<size_t>(x) + static_cast<size_t>(dimX) * (static_cast<size_t>(y) +
+                                                                     static_cast<size_t>(dimY) * z);
+          if (idx_3d < heat_.size()) max_h = std::max(max_h, heat_[idx_3d]);
+        }
+        const size_t idx_2d = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y;
+        if (max_h > heat_2d_[idx_2d]) heat_2d_[idx_2d] = max_h;
+      }
     }
   }
 
@@ -1992,21 +2224,8 @@ class MapUtil {
       }
     }
 
-    // Step 6: Project 3D dynamic heat into 2D (max over z columns)
-    if (dynamic_heat_enabled_ && !heat_.empty()) {
-      for (int x = 0; x < dimX; ++x) {
-        for (int y = 0; y < dimY; ++y) {
-          float max_h = 0.0f;
-          for (int z = 0; z < dimZ; ++z) {
-            const size_t idx_3d =
-                static_cast<size_t>(x) + dimX * (static_cast<size_t>(y) + dimY * z);
-            if (idx_3d < heat_.size()) max_h = std::max(max_h, heat_[idx_3d]);
-          }
-          const size_t idx_2d = static_cast<size_t>(x) + static_cast<size_t>(dimX) * y;
-          if (max_h > heat_2d_[idx_2d]) heat_2d_[idx_2d] = max_h;
-        }
-      }
-    }
+    // Step 6: Project 3D dynamic/social heat into 2D (max over z columns)
+    projectDynamicHeatTo2DFrom3D(dimX, dimY, dimZ);
 
     has_2d_map_ = true;
   }
@@ -2130,6 +2349,10 @@ class MapUtil {
         // window extends past the mapper's fixed-origin coverage.
       }
     }
+
+    // Merge 3D dynamic/social heat into 2D heat for ground planning.
+    projectDynamicHeatTo2DFrom3D(dimX, dimY, dim_(2));
+
     has_2d_map_ = true;
   }
 
@@ -2209,8 +2432,19 @@ class MapUtil {
         }
       }
     }
+
+    // Merge 3D dynamic/social heat into 2D heat for ground planning.
+    projectDynamicHeatTo2DFrom3D(dimX, dimY, dim_(2));
+
     has_2d_map_ = true;
   }
+
+  std::vector<float> temporal_maps_;
+  bool temporal_maps_enabled_{true};
+  bool use_temporal_maps_{true};            // Enable/disable temporal map computation
+  float time_res_{0.1f};                    // Fixed 0.1s per time step
+  float time_horizon_{3.0f};                // Extended to 3.0s for better pedestrian prediction
+  // Temporal decay parameters (independent from heat, hardcoded in computeTemporalMaps)
 
  protected:
   // Resolution

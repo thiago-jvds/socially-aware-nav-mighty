@@ -30,7 +30,7 @@ mighty_node:
         sim_env: "fake_sim"                             # ["gazebo", "fake_sim"]
         vehicle_type: "ground_robot"                    # ["uav", "ground_robot", "quadruped_robot"]
         use_hardware: true                             # [-] Real hardware vs simulation
-        use_trajectory_tracker: true                     # [-] Use FF+FB trajectory tracker instead of pure pursuit
+        use_trajectory_tracker: false                   # [-] Use FF+FB trajectory tracker instead of pure pursuit
         provide_goal_in_global_frame: false             # [-] Goal given in global frame (true for hardware with Vicon)
         visual_level: 2                                 # [-] Visualization level (0: none, 1: minimal, 2: full)
 
@@ -71,8 +71,8 @@ mighty_node:
 
         # --- Ground Robot Planning ---
         ground_robot_L_min: 0.2                         # [m] Lookahead distance for point A (planning start point)
-        ground_robot_v_max: 1.5                         # [m/s] Max linear velocity for ground robot
-        ground_robot_w_max: 0.5                         # [rad/s] Max angular velocity for smooth tracking
+        ground_robot_v_max: 2.0                        # [m/s] Max linear velocity for ground robot
+        ground_robot_w_max: 1.0                         # [rad/s] Max angular velocity for smooth tracking
 
         # --- 2D Ground Robot Planning ---
         use_2d_planning: true                            # [-] Enable 2D planning with 2D heat for ground robots
@@ -86,31 +86,35 @@ mighty_node:
 
         # --- Pure Pursuit Controller ---
         pure_pursuit_L_min: 0.2                         # [m] Min lookahead distance (higher = smoother)
-        pure_pursuit_k_v: 0.1                           # [s] Velocity-dependent lookahead factor (L = L_min + k_v * v)
+        pure_pursuit_k_v: 0.6                           # [s] Velocity-dependent lookahead factor (L = L_min + k_v * v)
         pure_pursuit_stopping_radius: 0.1               # [m] Stop when within this distance of goal
         pure_pursuit_adaptive_lookahead_distance: 2.0   # [m] Start reducing lookahead within this distance of goal
-        pure_pursuit_turn_in_place_threshold_deg: 20.0  # [deg] Heading error threshold for turn-in-place
-        pure_pursuit_slow_down_threshold_deg: 10.0       # [deg] Heading error threshold for speed reduction
+        pure_pursuit_turn_in_place_threshold_deg: 180.0  # [deg] Heading error threshold for turn-in-place
+        pure_pursuit_slow_down_threshold_deg: 20.0       # [deg] Heading error threshold for speed reduction
         pure_pursuit_w_smoothing_alpha: 0.3             # [-] Angular velocity smoothing (0 = none, 1 = full)
 
         # --- Social Avoidance ---
-        social_avoidance_enabled: false                 # [-] Enable social avoidance near dynamic agents
-        social_avoidance_d_trigger: 1.5                 # [m] Threat trigger distance
+        social_avoidance_enabled: true                 # [-] Enable social avoidance near dynamic agents
+        social_avoidance_d_trigger: 1.0                 # [m] Threat trigger distance
         social_avoidance_min_repulsion_norm: 0.1        # [-] Minimum summed repulsion norm to trigger avoidance
-        social_avoidance_h: 1.0                         # [m] Evasion step distance
+        social_avoidance_h: 0.5                         # [m] Evasion step distance
+        social_avoidance_pedestrian_mu_threshold: 0.63  # [-] If CV mode probability drops below this, treat as pedestrian for social avoidance
 
         # --- Social Heat Map --- 
-        dynamic_heat_enabled: false                     # [-] Disable dynamic heat for ground robot
-        dynamic_heat_use_social: false                  # [-] Use social dynamic heat model (false = classic)
+        dynamic_heat_enabled: true                    # [-] Disable dynamic heat for ground robot
+        dynamic_heat_use_social: true                  # [-] Use social dynamic heat model (false = classic)
+        dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
+        heat_Hmax: 100.0                                 # [-] Maximum dynamic heat value
         social_heat_A0: 30.0                            # [-] Initial social heat amplitude
         social_heat_dA: 0.8                             # [-] Amplitude decay per second
-        social_heat_sigma_x0: 2.0                       # [m] Initial longitudinal spread
-        social_heat_sigma_y0: 1.0                       # [m] Initial lateral spread
-        social_heat_d_sigma: 0.25                       # [m/s] Gaussian spread growth rate
+        social_heat_sigma_x0: 0.80                       # [m] Initial longitudinal spread
+        social_heat_sigma_y0: 0.30                       # [m] Initial lateral spread
+        social_heat_d_sigma: 0.30                      # [m/s] Gaussian spread growth rate
+        social_heat_r0: 0.60                            # [m] Forbidden radius
         social_heat_d_r0: 0.06                          # [m/s] Hard-collision radius decay
         social_heat_robot_radius_m: 0.0                # [m] Robot radius for collision radius inflation
-        social_heat_delta_x: 0.2                        # [m] Social Gaussian longitudinal shift
-        social_heat_delta_y: 0.15                       # [m] Social Gaussian lateral shift
+        social_heat_delta_x: 0.15                        # [m] Social Gaussian longitudinal shift
+        social_heat_delta_y: 0.1                      # [m] Social Gaussian lateral shift
 
         # =====================================================================
         # [TUNE] — Adjust for performance / behavior trade-offs
@@ -128,9 +132,8 @@ mighty_node:
         goal_seen_radius: 1.0                           # [m] Distance to stop replanning
 
         # --- L-BFGS Optimization Weights ---
-        dynamic_weight: 0.0                            # [-] Dynamic obstacle avoidance weight
-        time_weight: 1e+2                               # [-] Time cost weight
-        # pos_anchor_weight: 1e+4                         # [-] Position anchor weight (penalizes deviation from DGP waypoints)
+        dynamic_weight: 1e+4                           # [-] Dynamic obstacle avoidance weight
+        time_weight: 8e+2                               # [-] Time cost weight
         stat_weight: 0.0                               # [-] Static obstacle weight (pushes trajectory away from obstacles)
         jerk_weight: 1e+4                               # [-] Jerk smoothness weight
         dyn_constr_vel_weight: 1e+3                     # [-] Velocity constraint violation weight
@@ -145,7 +148,7 @@ mighty_node:
 
         # --- Static Obstacle Heat (boundary halo) ---
         static_heat_alpha: 1.0                          # [-] Peak heat at obstacle boundary
-        static_heat_Hmax: 10.0                          # [-] Maximum static heat value
+        static_heat_Hmax: 50.0                          # [-] Maximum static heat value
         static_heat_rmax_m: 1.0                         # [m] Maximum halo radius
 
         # --- Obstacle Tracking ---
@@ -174,9 +177,9 @@ mighty_node:
         free_start_factor: 1.0                          # [-] Radius factor for start freeing
         use_free_goal: false                            # [-] Free the goal voxel if occupied
         free_goal_factor: 2.0                           # [-] Radius factor for goal freeing
-        global_planner_huristic_weight: 3.0             # [-] A* heuristic weight (higher = greedier)
+        global_planner_huristic_weight: 8.0             # [-] A* heuristic weight (higher = greedier)
         heat_weight: 20.0                                # [-] Overall heat map weight in A* cost
-        max_dist_vertexes: 0.5                         # [m] Max distance between path vertices
+        max_dist_vertexes: 1.5                         # [m] Max distance between path vertices
         w_unknown: 30.0                                  # [-] Cost weight for unknown cells
         w_align: 0.0                                    # [-] Cost weight for alignment with initial velocity
         decay_len_cells: 100.0                          # [-] Decay length for alignment cost
@@ -184,8 +187,6 @@ mighty_node:
 
         # --- Heat Map Internals ---
         use_heat_map: true                              # [-] Master toggle for heat map
-        dynamic_heat_enabled: false                     # [-] Disable dynamic heat for ground robot
-        dynamic_as_occupied_current: true               # [-] Mark obstacle's current cell as hard-occupied
         dynamic_as_occupied_future: false                # [-] Mark obstacle's future cells as hard-occupied
         heat_alpha0: 1.0                                # [-] Reachability blob weight
         heat_alpha1: 2.0                                # [-] Trajectory tube weight
@@ -193,8 +194,7 @@ mighty_node:
         heat_q: 2                                       # [-] Trajectory tube falloff power
         heat_tau_ratio: 0.5                             # [-] Time decay ratio for heat
         heat_gamma: 0.0                                 # [m/s] Tube radius growth rate
-        heat_Hmax: 10.0                                 # [-] Maximum dynamic heat value
-        dyn_base_inflation_m: 0.5                       # [m] Base inflation for dynamic obstacle bboxes
+        dyn_base_inflation_m: 0.1                       # [m] Base inflation for dynamic obstacle bboxes
         heat_num_samples: 15                            # [-] Samples for heat computation
         static_heat_enabled: true                       # [-] Enable static obstacle heat
         static_heat_p: 2                                # [-] Static heat falloff power
@@ -246,8 +246,8 @@ mighty_node:
         # --- ESDF-Based Obstacle Avoidance (ground robot only) ---
         use_esdf_cost: true                             # [-] Enable ESDF distance cost in L-BFGS
         esdf_weight: 1.0e+5                             # [-] ESDF cost weight in objective
-        esdf_d_safe: 0.7                                # [m] Safety distance threshold
-        esdf_truncation_distance: 3                    # [voxels] Must match mapper's distance_grid_2d.truncation_distance
+        esdf_d_safe: 0.5                                # [m] Safety distance threshold
+        esdf_truncation_distance: 15                   # [voxels] Must match mapper's distance_grid_2d.truncation_distance
 
         # --- Dynamic Obstacle Internals ---
         dynamic_obstacle_base_inflation: 0.5            # [m] Inflation for dynamic obstacles

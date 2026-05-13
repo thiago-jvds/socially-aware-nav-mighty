@@ -39,9 +39,9 @@ def generate_launch_description():
         use_hardware = LaunchConfiguration('use_hardware').perform(context)
         goal_tolerance = LaunchConfiguration('goal_tolerance').perform(context)
         goal_points = LaunchConfiguration('goal_points').perform(context)
-        num_agents = int(LaunchConfiguration('num_agents').perform(context))
-        radius = float(LaunchConfiguration('radius').perform(context))
-        use_ground_robot = LaunchConfiguration('use_ground_robot').perform(context)
+        # num_agents = int(LaunchConfiguration('num_agents').perform(context))
+        # radius = float(LaunchConfiguration('radius').perform(context))
+        # use_ground_robot = LaunchConfiguration('use_ground_robot').perform(context)
 
         ns = 'NX01'
 

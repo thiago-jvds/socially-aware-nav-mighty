@@ -25,10 +25,13 @@
 
 #include <dynus_interfaces/msg/dyn_traj.hpp>
 #include <dynus_interfaces/msg/dyn_traj_array.hpp>
+#include <dynus_interfaces/msg/halt.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <dynus_interfaces/msg/speedy_path.hpp>
+#include <dynus_interfaces/msg/vw_command_list.hpp>
+#include <dynus_interfaces/msg/vw_command.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -121,6 +124,8 @@ class MIGHTY_NODE : public rclcpp::Node {
   void swarmGoalCallback(const geometry_msgs::msg::PoseStamped& msg);
   // Frontier exploration goal-selection loop, runs at expl_select_rate_hz.
   void exploreSelectCallback();
+  // Halt mode loop
+  void haltCallback();
   void lookaheadPointCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg);
   void mapCallback(const sensor_msgs::msg::PointCloud2::ConstPtr& pcl2ptr_map_ros,
                    const sensor_msgs::msg::PointCloud2::ConstPtr& pcl2ptr_unk_ros);
@@ -167,6 +172,7 @@ class MIGHTY_NODE : public rclcpp::Node {
   void publishGoal();          // Publish the goal (trajectory points)
   void publishTrajectory();    // Publish the full trajectory with replan support
   void publishMpcPath();       // Publish smoothed global path as nav_msgs/Path for MPC
+  void publishSpatialTemporalCmd();  // Publish spatial-temporal command for ST pipeline
   void publishPointG() const;  // Publish the point G (projected terminal goal)
   void publishPointE() const;  // Publish the point E (Local trajectory's goal)
   void publishPointA() const;  // Publish the point A (starting point)
@@ -229,6 +235,7 @@ class MIGHTY_NODE : public rclcpp::Node {
   rclcpp::Publisher<dynus_interfaces::msg::Goal>::SharedPtr pub_goal_;
   rclcpp::Publisher<dynus_interfaces::msg::Trajectory>::SharedPtr pub_trajectory_;
   rclcpp::Publisher<dynus_interfaces::msg::SpeedyPath>::SharedPtr pub_mpc_path_;
+  rclcpp::Publisher<dynus_interfaces::msg::VwCommandList>::SharedPtr pub_spatial_temporal_cmd_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_G_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_E_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_G_term_;
@@ -247,6 +254,7 @@ class MIGHTY_NODE : public rclcpp::Node {
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_traj_transformed_;
   // Corridor-hop yaw-target arrow at G (ground robot only).
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_corridor_yaw_target_;
+  rclcpp::Publisher<dynus_interfaces::msg::Halt>::SharedPtr pub_halt_;
 
   // Subscribers
   rclcpp::Subscription<dynus_interfaces::msg::DynTraj>::SharedPtr sub_traj_;
@@ -318,6 +326,10 @@ class MIGHTY_NODE : public rclcpp::Node {
   // RViz drops messages at that rate too.
   double last_actual_traj_publish_t_ = 0.0;
 
+  // Timer for halt mode, bypass planner
+  rclcpp::TimerBase::SharedPtr timer_halt_;
+
+
   // Visualization
   visualization_msgs::msg::MarkerArray hgp_path_marker_;
   visualization_msgs::msg::MarkerArray original_hgp_path_marker_;
@@ -337,6 +349,7 @@ class MIGHTY_NODE : public rclcpp::Node {
   std::string id_str_;
   parameters par_;
   uint32_t trajectory_id_ = 0;             // Trajectory ID for replan detection
+  uint32_t spatial_temporal_cmd_id_ = 0;            // Spatial-temporal command ID for ST pipeline updates
   double final_g_ = 0.0;                   // only for debugging
   bool verbose_computation_time_ = false;  // only for debugging
   int marker_fov_id_ = 0;

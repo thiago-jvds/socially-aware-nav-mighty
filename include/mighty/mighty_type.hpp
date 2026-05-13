@@ -66,6 +66,9 @@ struct parameters {
   // Visual level
   int visual_level;
 
+  // Spatial-Temporal Planner pipeline (sim only)
+  bool enable_spatial_temporal_pipeline{false};
+
   // Global planner parameters
   std::string global_planner;
   bool global_planner_verbose;
@@ -145,6 +148,7 @@ struct parameters {
   float social_heat_sigma_x0{2.0f};
   float social_heat_sigma_y0{1.0f};
   float social_heat_d_sigma{0.25f};
+  float social_heat_r0{0.6f};
   float social_heat_d_r0{0.06f};
   float social_heat_robot_radius_m{0.0f};
   float social_heat_delta_x{0.2f};
@@ -251,6 +255,7 @@ struct parameters {
   double social_avoidance_d_trigger{1.0};
   double social_avoidance_min_repulsion_norm{0.1};
   double social_avoidance_h{1.0};
+  double social_avoidance_pedestrian_mu_threshold{0.60};
 
   // Dynamic k_value parameters
   int num_replanning_before_adapt;
@@ -1093,6 +1098,7 @@ struct dynTraj {
 
   // IMM data
   Eigen::Vector3d mu;
+  bool use_mu;
 
   dynTraj() = default;
 

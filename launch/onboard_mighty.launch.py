@@ -45,6 +45,8 @@ def generate_launch_description():
     sim_env_arg = DeclareLaunchArgument('sim_env', default_value='', description='Simulation environment: gazebo or fake_sim (empty = use mighty.yaml default)')
     use_ground_robot_arg = DeclareLaunchArgument('use_ground_robot', default_value='false', description='Enable ground robot mode (spawns p3at, uses cmd_vel control)')
     use_trajectory_tracker_arg = DeclareLaunchArgument('use_trajectory_tracker', default_value='', description='Override use_trajectory_tracker (empty = use config default)')
+    enable_spatial_temporal_pipeline_arg = DeclareLaunchArgument('enable_spatial_temporal_pipeline', default_value='false', description='Enable spatial-temporal pipeline (sim only)')
+    disable_socially_aware_arg = DeclareLaunchArgument('disable_socially_aware', default_value='false', description='Disable socially-aware planning and dynamic heat map')
     use_onboard_localization_arg = DeclareLaunchArgument('use_onboard_localization', default_value='false', description='Use onboard localization (DLIO) vs Vicon')
     depth_camera_name_arg = DeclareLaunchArgument('depth_camera_name', default_value='d435', description='Depth camera name for topic remapping')
     robot_type_arg = DeclareLaunchArgument('robot_type', default_value='quadrotor', description='Robot type: quadrotor, red_rover, star_robot')
@@ -100,6 +102,8 @@ def generate_launch_description():
         odometry_topic = LaunchConfiguration('odometry_topic').perform(context)
         sim_env = LaunchConfiguration('sim_env').perform(context)
         use_ground_robot = convert_str_to_bool(LaunchConfiguration('use_ground_robot').perform(context))
+        enable_spatial_temporal_pipeline = convert_str_to_bool(LaunchConfiguration('enable_spatial_temporal_pipeline').perform(context))
+        disable_socially_aware = convert_str_to_bool(LaunchConfiguration('disable_socially_aware').perform(context))
         use_onboard_localization = convert_str_to_bool(LaunchConfiguration('use_onboard_localization').perform(context))
         depth_camera_name = LaunchConfiguration('depth_camera_name').perform(context)
         robot_type = LaunchConfiguration('robot_type').perform(context)
@@ -156,6 +160,16 @@ def generate_launch_description():
         parameters['use_benchmark'] = bool(use_benchmark)
         if use_benchmark:
             parameters['global_planner'] = global_planner
+
+        # Spatial-temporal pipeline overrides (sim only)
+        if enable_spatial_temporal_pipeline:
+            parameters['enable_spatial_temporal_pipeline'] = True
+            parameters['global_planner'] = '6d_planner'
+
+        if disable_socially_aware:
+            parameters['social_avoidance_enabled'] = False
+            parameters['dynamic_heat_enabled'] = False
+            parameters['dynamic_heat_use_social'] = False
    
         # Map frame id: hardware uses per-agent map frame, simulation uses global "map"
         map_frame_id = map_frame_id_override if map_frame_id_override else (f'{namespace}/map' if use_hardware else 'map')
@@ -207,7 +221,7 @@ def generate_launch_description():
                     remappings=[('lidar_cloud_in', lidar_point_cloud_topic),
                                 ('depth_camera_cloud_in', f'{depth_camera_name}/depth/color/points')],
                     arguments=['--ros-args', '--log-level', 'error'],
-                    prefix='xterm -e gdb -q -ex run --args', # gdb debugging
+                    # prefix='xterm -e gdb -q -ex run --args', # gdb debugging
         )
 
         # Robot state publisher node
@@ -291,12 +305,26 @@ def generate_launch_description():
                 'max_velocity': parameters.get('ground_robot_v_max', 0.5),
                 'max_angular_velocity': 1.5,
                 'stopping_radius': 0.3,
-                'Kp_along': 1.0,
+                'Kp_along': 4.0,
                 'Kp_cross': 2.0,
                 'Kp_yaw': 2.0,
                 'w_smoothing': 0.3,
                 'use_hardware': use_hardware,
                 'map_frame_id': map_frame_id,
+            }],
+            output='screen',
+            emulate_tty=True,
+        )
+
+        ff_fb_controller_node = Node(
+            package='mighty',
+            executable='ff_fb_controller',
+            name='ff_fb_controller',
+            namespace=namespace,
+            parameters=[{
+                'max_velocity': parameters.get('ground_robot_v_max', 0.5),
+                'max_angular_velocity': 1.5,
+                'control_rate': 50.0,
             }],
             output='screen',
             emulate_tty=True,
@@ -417,6 +445,8 @@ def generate_launch_description():
         sim_env_arg,
         use_ground_robot_arg,
         use_trajectory_tracker_arg,
+        enable_spatial_temporal_pipeline_arg,
+        disable_socially_aware_arg,
         use_onboard_localization_arg,
         depth_camera_name_arg,
         robot_type_arg,

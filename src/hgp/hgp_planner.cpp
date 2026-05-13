@@ -162,6 +162,16 @@ vec_Vecf<3> HGPPlanner::getPath() { return path_; }
 
 vec_Vecf<3> HGPPlanner::getRawPath() { return raw_path_; }
 
+std::vector<double> HGPPlanner::getVCmds() { return v_cmds_; }
+
+std::vector<double> HGPPlanner::getWCmds() { return w_cmds_; }
+
+std::vector<double> HGPPlanner::getYaws() { return yaws_; }
+
+std::vector<double> HGPPlanner::getXs() { return xs_; }
+
+std::vector<double> HGPPlanner::getYs() { return ys_; }
+
 vec_Vecf<3> HGPPlanner::removeCornerPts(const vec_Vecf<3>& path) {
   if (path.size() < 2) return path;
 
@@ -344,6 +354,11 @@ bool HGPPlanner::plan(const Vecf<3>& start, const Vecf<3>& start_vel, const Vecf
 
   path_.clear();
   raw_path_.clear();
+  v_cmds_.clear();
+  w_cmds_.clear();
+  yaws_.clear();
+  xs_.clear();
+  ys_.clear();
   status_ = 0;
 
   Veci<3> start_int = map_util_->floatToInt(start);
@@ -454,6 +469,12 @@ bool HGPPlanner::plan(const Vecf<3>& start, const Vecf<3>& start_vel, const Vecf
                       max_expand, hgp_timeout_duration_ms_);
 
   const auto path = graph_search_->getPath();
+
+  v_cmds_ = graph_search_->getVCmds();
+  w_cmds_ = graph_search_->getWCmds();
+  yaws_ = graph_search_->getYaws();
+  xs_ = graph_search_->getXs();
+  ys_ = graph_search_->getYs();
 
   if (path.size() < 1) {
     std::cout << ANSI_COLOR_RED "Cannot find a path from " << start.transpose() << " to "

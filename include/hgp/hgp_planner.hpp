@@ -67,6 +67,31 @@ class HGPPlanner {
    */
   vec_Vecf<3> getRawPath();
 
+  /** @brief Get the velocity commands for the ground robot.
+   *  @return Vector of velocity commands.
+   */
+  std::vector<double> getVCmds();
+
+  /** @brief Get the angular velocity commands for the ground robot.
+   *  @return Vector of angular velocity commands.
+   */
+  std::vector<double> getWCmds();
+
+  /** @brief Get the yaw angle commands for the ground robot.
+   *  @return Vector of yaw angle commands in radians.
+   */
+  std::vector<double> getYaws();
+
+  /* @brief Get the x coordinates of the waypoints for the ground robot.
+   *  @return Vector of x coordinates.
+   */
+  std::vector<double> getXs();
+
+  /* @brief Get the y coordinates of the waypoints for the ground robot.
+   *  @return Vector of y coordinates.
+   */
+  std::vector<double> getYs();
+
   /** @brief Set the planning timeout duration.
    *  @param timeout_duration_ms Timeout in milliseconds.
    */
@@ -191,6 +216,12 @@ class HGPPlanner {
   vec_Vecf<3> raw_path_;
   // Modified path for future usage
   vec_Vecf<3> path_;
+  // Velocity commands for ground robot spatial-temporal path (if applicable)
+  std::vector<double> v_cmds_;
+  std::vector<double> w_cmds_;
+  std::vector<double> yaws_;
+  std::vector<double> xs_;
+  std::vector<double> ys_;
   // Flag indicating the success of planning
   int status_ = 0;
   // Enabled for printing info

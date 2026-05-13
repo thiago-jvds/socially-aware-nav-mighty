@@ -17,6 +17,11 @@ windows:
       #   - source /home/swarm/code/realsense-ros_ws/install/setup.bash
       #   - ros2 launch realsense2_camera rs_d455_launch.py
 
+      # # Static TF
+      # - shell_command:
+      #   - source /home/swarm/code/mighty_ws/install/setup.bash
+      #   - ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 $VEHNAME/base_link $VEHNAME/d455_link
+
       # Livox
       - shell_command:
         - source /home/swarm/code/livox_ws/install/setup.bash
@@ -26,11 +31,6 @@ windows:
       - shell_command:
         - source /home/swarm/code/dlio_ws/install/setup.bash
         - ros2 launch direct_lidar_inertial_odometry dlio.launch.py namespace:=$VEHNAME pointcloud_topic:="/$VEHNAME/livox/lidar" imu_topic:="/$VEHNAME/livox/imu" config_file_name:="dlio_tilted_20deg.yaml"
-
-      # # Static TF
-      # - shell_command:
-      #   - source /home/swarm/code/mighty_ws/install/setup.bash
-      #   - ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 $VEHNAME/base_link $VEHNAME/d455_link
 
       # Republish rviz 2D goal to term goal
       - shell_command:
@@ -46,19 +46,14 @@ windows:
       # Global Mapper
       - shell_command:
         - source /home/swarm/code/mighty_ws/install/setup.bash
-        - ros2 launch global_mapper_ros global_mapper_node.launch.py hardware:=true quad:="$VEHNAME" depth_pointcloud_topic:="livox/lidar" pose_topic:="dlio/odom_node/pose" odom_topic:="dlio/odom_node/odom" param_file:="hw_global_mapper.yaml"
-
-      # MPC Controller
-      # - shell_command:
-      #   - source /home/swarm/code/mighty_ws/install/setup.bash
-      #   - ros2 launch mpc mpc.launch.py namespace:=$VEHNAME params_file:=/home/swarm/code/mighty_ws/src/mpc/config/mpc.yaml hardware:=true
+        - ros2 launch global_mapper_ros global_mapper_node.launch.py hardware:=true quad:="$VEHNAME" depth_pointcloud_topic:="livox/lidar" pose_topic:="dlio/odom_node/pose" odom_topic:="dlio/odom_node/odom" param_file:="hw_ground_robot.yaml"
 
       # RVIZ
-      # - shell_command:
-      #   - source /home/swarm/code/mighty_ws/install/setup.bash
-      #   - source /home/swarm/code/decomp_ws/install/setup.bash
-      #   - rviz2 rviz2 -d /home/swarm/code/mighty_ws/src/mighty/rviz/mighty_hw_ground_robot.rviz
+      - shell_command:
+        - source /home/swarm/code/mighty_ws/install/setup.bash
+        - source /home/swarm/code/decomp_ws/install/setup.bash
+        - rviz2 rviz2 -d /home/swarm/code/mighty_ws/src/mighty/rviz/mighty_hw_ST01.rviz
 
       # - shell_command:
       #   - source /home/swarm/code/mighty_ws/install/setup.bash
-      #   - ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 1 map world
+      #   - ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 1 $VEHNAME/map world

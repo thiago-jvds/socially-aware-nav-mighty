@@ -80,6 +80,27 @@ struct State {
   /// velocity used for dynamic A*
   Eigen::Vector3d vel = Eigen::Vector3d::Zero();
 
+  /// ----------------------------------------
+    /// 6D Dynamic A* components
+    /// State = (x, y, t, yaw, v, w)
+
+    long long dynId = -1;
+    long long dynParentId = -1;
+    
+    /// discrete indices
+    int tIdx = 0;  
+    int yawIdx = 0;
+    int vIdx = 0;
+    int wIdx = 0;
+    
+    //// continuous variables
+    double cx = 0.0;
+    double cy = 0.0;
+    double yaw = 0.0;
+    double v_x = 0.0;
+    double w_z = 0.0;
+  // ----------------------------------------
+
   /// 2D constructor
   State(int id, int x, int y, int dx, int dy) : id(id), x(x), y(y), dx(dx), dy(dy) {}
 
@@ -90,6 +111,10 @@ struct State {
   /// 3D constructor with g value
   State(int id, int x, int y, int z, int dx, int dy, int dz, double g)
       : id(id), x(x), y(y), z(z), dx(dx), dy(dy), dz(dz), g(g) {}
+  
+  /// 6D constructor for 6D Dynamic A*
+    State(long long dynId, int x, int y, int tIdx, int yawIdx, int vIdx, int wIdx)
+      : dynId(dynId), x(x), y(y), tIdx(tIdx), yawIdx(yawIdx), vIdx(vIdx), wIdx(wIdx) {}
 };
 
 /** @brief Precomputed neighbor tables for 2D Jump Point Search.
@@ -205,6 +230,31 @@ class GraphSearch {
    */
   std::vector<StatePtr> getPath() const;
 
+  /** @brief Get the velocity commands for the ground robot.
+   *  @return Vector of velocity commands.
+   */
+  std::vector<double> getVCmds() const;
+
+  /** @brief Get the angular velocity commands for the ground robot.
+   *  @return Vector of angular velocity commands.
+   */
+  std::vector<double> getWCmds() const;
+
+  /** @brief Get the yaw angles for the ground robot.
+   *  @return Vector of yaw angles.
+   */
+  std::vector<double> getYaws() const;
+
+  /** @brief Get the x coordinates of the path.
+   *  @return Vector of x coordinates.
+   */
+  std::vector<double> getXs() const;
+
+  /** @brief Get the y coordinates of the path.
+   *  @return Vector of y coordinates.
+   */
+  std::vector<double> getYs() const;
+
   /** @brief Get all states currently in the open set.
    *  @return Vector of states that have been opened but not yet closed.
    */
@@ -245,6 +295,11 @@ class GraphSearch {
   /// Main planning loop for Static JPS
   bool static_jps_plan(StatePtr& currNode_ptr, int max_expand, int start_id, int goal_id,
                        std::chrono::milliseconds timeout_duration);
+
+  /// Main planning loop for Kollwitz's planner (6D planner)
+  bool kollwitz_plan(StatePtr& currNode_ptr, int max_expand, int start_id, int goal_id,
+                   std::chrono::milliseconds timeout_duration, int tDim);
+
   /// Main planning loop for Dynamic A*
   bool dynamic_astar_plan(StatePtr& currNode_ptr, int max_expand, int start_id, int goal_id,
                           std::chrono::milliseconds timeout_duration);
@@ -257,11 +312,20 @@ class GraphSearch {
   /// Get successor function for JPS
   void getJpsSucc(const StatePtr& curr, std::vector<int>& succ_ids,
                   std::vector<double>& succ_costs);
+  /// Get successor function for 6D Dynamic A* 
+  void getDynamicSucc(const StatePtr &curr, std::vector<long long> &succ_ids, std::vector<double> &succ_costs, std::vector<double> &succ_times, int tDim);
+    
   /// Recover the optimal path
   std::vector<StatePtr> recoverPath(StatePtr node, int id);
 
+  /// Recover the optimal path for dynamic A*
+  std::vector<StatePtr> recoverPath(StatePtr node, long long start_dyn_id);
+
   /// Get subscript
   int coordToId(int x, int y, int z) const;
+
+  long long coordToId(int x, int y, int yaw_idx, int v_idx, int t_idx, int w_idx) const;
+
 
   /// Check if (x, y, z) is free
   bool isFree(int x, int y, int z) const;
@@ -274,6 +338,21 @@ class GraphSearch {
 
   /// Clculate heuristic
   double getHeur(int x, int y, int z) const;
+  
+  // Calculate heuristic for 6D Dynamic A*
+  double getHeur(const StatePtr &node) const;
+
+  /// Calculate heuristic for dynamic A*
+  double getStateCost(const StatePtr &node, const StatePtr &parentNode) const;
+
+  double wrapPi(double angle) {
+    while (angle > M_PI) angle -= 2.0 * M_PI;
+    while (angle < -M_PI) angle += 2.0 * M_PI;
+    return angle;
+  }
+
+  /// Check if current continuous (x,y) is within reach of target (x,y)
+  bool withinReach(double x, double y, double target_x, double target_y, double reach_radius) const;
 
   /// Determine if (x, y, z) has forced neighbor with direction (dx, dy, dz)
   bool hasForced(int x, int y, int z, int dx, int dy, int dz);
@@ -324,7 +403,56 @@ class GraphSearch {
   std::vector<StatePtr> hm_;
   std::vector<bool> seen_;
 
+  std::unordered_map<long long, StatePtr> dyn_hm_;
+  std::unordered_map<long long, bool> dyn_seen_;
+
+  constexpr static int NUM_VELOCITIES = 10;
+  inline int discretizeVelocity(double v_x)
+  {
+    if (v_x <= 0.01) return 0;
+    int v_idx = std::ceil(v_x / (v_max_ / (NUM_VELOCITIES - 1)));
+    if (v_idx >= NUM_VELOCITIES) v_idx = NUM_VELOCITIES - 1;
+    if (v_idx < 0) v_idx = 0;
+    return v_idx;
+  }
+
+  constexpr static int NUM_ANGULAR_VELOCITIES = 21;
+  inline int discretizeAngularVelocity(double v_z)
+  {
+    // Keep signed angular velocity information so left/right turns map to
+    // different states instead of collapsing into a single bin.
+    double w = v_z;
+    if (w > w_max_)
+      w = w_max_;
+    if (w < -w_max_)
+      w = -w_max_;
+
+    const double step = (2.0 * w_max_) / (NUM_ANGULAR_VELOCITIES - 1);
+    int w_idx = static_cast<int>(std::round((w + w_max_) / step));
+    if (w_idx >= NUM_ANGULAR_VELOCITIES)
+      w_idx = NUM_ANGULAR_VELOCITIES - 1;
+    if (w_idx < 0)
+      w_idx = 0;
+    return w_idx;
+  }
+
+  constexpr static int NUM_ANGLES = 30;
+  inline int discretizeYaw(double yaw)
+  {
+    double normalized_yaw = yaw;
+    while (normalized_yaw < 0.0) normalized_yaw += 2.0 * M_PI;
+    while (normalized_yaw >= 2.0 * M_PI) normalized_yaw -= 2.0 * M_PI; // yaw in [0, 2pi)
+    int theta_idx = std::floor(normalized_yaw / ((2.0 * M_PI) / NUM_ANGLES));
+    return (theta_idx >= NUM_ANGLES) ? 0 : theta_idx;
+  }
+
   std::vector<StatePtr> path_;
+
+  std::vector<double> v_cmds_;
+  std::vector<double> w_cmds_;
+  std::vector<double> yaws_;
+  std::vector<double> xs_;
+  std::vector<double> ys_;
 
   std::vector<std::vector<int>> ns_;
   std::shared_ptr<JPS2DNeib> jn2d_;
@@ -352,6 +480,7 @@ class GraphSearch {
   Eigen::Vector3d a_max_3d_;
   double j_max_;
   Eigen::Vector3d j_max_3d_;
+  double w_max_{0.5};
 
   // For benchmarking time recording
   double global_planning_time_ = 0.0;

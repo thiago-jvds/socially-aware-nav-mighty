@@ -13,8 +13,8 @@ import argparse
 def record_ros2_bag(bag_name, bag_path, agents, topics=None):
 
     # Per-agent topics — this list mirrors what the RR04 rviz config displays
-    # (rviz/mighty_RR04.rviz) plus a few essentials for offline analysis
-    # (state, cmd_vel, dlio, lookahead).
+    # (rviz/mighty_RR04.rviz) plus essentials for offline analysis and IMM tuning
+    # (state, cmd_vel, dlio, lookahead, predicted_trajs with mode probabilities).
     base_topics = [
         # --- Global paths / subgoals / trajectories ---
         "/original_hgp_path_marker",
@@ -66,6 +66,8 @@ def record_ros2_bag(bag_name, bag_path, agents, topics=None):
         "/cmd_vel_auto",
         "/lookahead_point",
         "/lookahead_marker",
+        # --- IMM obstacle tracking & predictions (critical for tuning) ---
+        "/predicted_trajs",
         # --- DLIO odometry ---
         "/dlio/odom_node/pose",
         "/dlio/odom_node/odom",

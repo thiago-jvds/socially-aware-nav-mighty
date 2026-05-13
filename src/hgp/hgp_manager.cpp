@@ -57,7 +57,8 @@ void HGPManager::setParameters(const parameters& par) {
                                   par.dyn_base_inflation_m);
   map_util_->setSocialDynamicHeatParams(
       par.social_heat_A0, par.social_heat_dA, par.social_heat_sigma_x0, par.social_heat_sigma_y0,
-      par.social_heat_d_sigma, par.social_heat_d_r0, par.social_heat_robot_radius_m,
+      par.social_heat_d_sigma, par.social_heat_r0, par.social_heat_d_r0,
+      par.social_heat_robot_radius_m,
       par.social_heat_delta_x, par.social_heat_delta_y);
   map_util_->setDynHeatTubeRadius(par.dyn_heat_tube_radius_m);
   map_util_->setHeatWeight(par.heat_weight);
@@ -75,10 +76,11 @@ void HGPManager::setParameters(const parameters& par) {
   std::cout << "  dynamic_heat_enabled: " << par.dynamic_heat_enabled
             << ", dynamic_heat_use_social: " << par.dynamic_heat_use_social
             << ", static_heat_enabled: " << par.static_heat_enabled << std::endl;
-  std::cout << "  social_heat(A0,dA,sx0,sy0,ds,dr0,rr,dx,dy): "
+  std::cout << "  social_heat(A0,dA,sx0,sy0,ds,r0,dr0,rr,dx,dy): "
             << par.social_heat_A0 << ", " << par.social_heat_dA << ", "
             << par.social_heat_sigma_x0 << ", " << par.social_heat_sigma_y0 << ", "
-            << par.social_heat_d_sigma << ", " << par.social_heat_d_r0 << ", "
+            << par.social_heat_d_sigma << ", " << par.social_heat_r0 << ", "
+            << par.social_heat_d_r0 << ", "
             << par.social_heat_robot_radius_m << ", " << par.social_heat_delta_x << ", "
             << par.social_heat_delta_y << std::endl;
   std::cout << "===================================" << std::endl;
@@ -270,7 +272,7 @@ inline void collapseIntoLongSegments(const mighty::VoxelMapUtil& map, double res
 
 bool HGPManager::solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const Vec3f& goal_sent,
                           double& final_g, double weight, double current_time, vec_Vecf<3>& path,
-                          vec_Vecf<3>& raw_path) {
+                          vec_Vecf<3>& raw_path, std::vector<double>& v_cmds_out, std::vector<double>& w_cmds_out, std::vector<double>& yaws_out, std::vector<double>& xs_out, std::vector<double>& ys_out) {
   // map_util_for_planning_ was already copied in setupHGPPlanner() and modified by
   // freeStart/freeGoal — do NOT re-copy here or those freeings are lost.
 
@@ -308,6 +310,14 @@ bool HGPManager::solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const
   if (result) {
     path = planner_ptr_->getPath();
     raw_path = planner_ptr_->getRawPath();
+
+    if (is_ground_robot_) {
+      v_cmds_out = planner_ptr_->getVCmds();
+      w_cmds_out = planner_ptr_->getWCmds();
+      yaws_out = planner_ptr_->getYaws();
+      xs_out = planner_ptr_->getXs();
+      ys_out = planner_ptr_->getYs();
+    }
   }
 
   // Resample path at uniform arc-length intervals (skip for 2D ground robot — already done in planner)

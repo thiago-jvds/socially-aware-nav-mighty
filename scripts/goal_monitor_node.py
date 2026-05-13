@@ -139,17 +139,17 @@ class GoalMonitorNode(Node):
         goal_x, goal_y, goal_z = tuple(self.goal_points[self.current_goal_index])
 
         # Compute distance to goal (2D for ground robots, 3D for UAVs)
-        if self.use_ground_robot:
-            distance = math.sqrt(
-                (self.current_position.x - goal_x) ** 2 +
-                (self.current_position.y - goal_y) ** 2
-            )
-        else:
-            distance = math.sqrt(
-                (self.current_position.x - goal_x) ** 2 +
-                (self.current_position.y - goal_y) ** 2 +
-                (self.current_position.z - goal_z) ** 2
-            )
+        # if self.use_ground_robot:
+        distance = math.sqrt(
+            (self.current_position.x - goal_x) ** 2 +
+            (self.current_position.y - goal_y) ** 2
+        )
+        # else:
+        #     distance = math.sqrt(
+        #         (self.current_position.x - goal_x) ** 2 +
+        #         (self.current_position.y - goal_y) ** 2 +
+        #         (self.current_position.z - goal_z) ** 2
+        #     )
 
         self.get_logger().info(f"Distance to goal: {distance:.2f}")
 

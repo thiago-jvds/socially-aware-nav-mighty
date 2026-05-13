@@ -167,6 +167,25 @@ class MIGHTY {
    */
   void setA_time(double A_time);
 
+  /** @brief Get the halt status (thread-safe).
+   *  @param to_halt Output flag indicating if the ground robot should halt.
+   */  
+  void getHalt(bool& to_halt);
+
+  /** @brief Set the halt status (thread-safe).
+   *  @param to_halt New flag indicating if the ground robot should halt.
+   */
+  void setHalt(bool to_halt);
+
+  /** @brief Get the spatial temporal path commands (thread-safe).
+   *  @param v_cmds Output velocity commands for spatial-temporal path following.
+   *  @param w_cmds Output angular velocity commands for spatial-temporal path following.
+   *  @param yaws Output yaw commands for spatial-temporal path following.
+   *  @param xs Output x coordinates for spatial-temporal path following.
+   *  @param ys Output y coordinates for spatial-temporal path following.
+   */
+  void getSpatialTemporalPath(std::vector<double>& v_cmds, std::vector<double>& w_cmds, std::vector<double>& yaws, std::vector<double>& xs, std::vector<double>& ys);
+
   /** @brief Get the current robot state (thread-safe).
    *  @param state Output current state.
    */
@@ -537,6 +556,12 @@ class MIGHTY {
   state G_term_;                                   // Terminal goal
   state social_hold_goal_;                         // Hold goal restored after social avoidance clears
   bool social_hold_goal_valid_ = false;            // Flag for social hold goal validity
+  bool to_halt_ = false;                             // Flag to indicate if the ground robot should halt
+  std::vector<double> v_cmds_;                                 // Velocity commands for spatial_temporal path following
+  std::vector<double> w_cmds_;                                 // Angular velocity commands for spatial_temporal path following    
+  std::vector<double> yaws_;                                   // Yaw commands for spatial_temporal path following
+  std::vector<double> xs_;                                  // X positions for spatial_temporal path following
+  std::vector<double> ys_;                                  // Y positions for spatial_temporal path following
   Eigen::Vector3d p_wait_ = Eigen::Vector3d::Zero(); // Wait/evasion anchor point for social avoidance
   std::deque<state> plan_;                         // Plan for the drone
   std::deque<std::vector<state>> plan_safe_paths_; // Indicate if the state has a safe path
@@ -581,6 +606,8 @@ class MIGHTY {
   std::mutex mtx_lookahead_point_;       // Mutex for the pure_pursuit_lookahead_point_
   std::mutex mtx_kdtree_map_;            // Mutex for the map_
   std::mutex mtx_kdtree_unk_;            // Mutex for the unknown map_
+  std::mutex mtx_halt_;                // Mutex for the to_halt_ flag
+  std::mutex mtx_spatial_temporal_cmds_;    // Mutex for the spatial-temporal commands
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr pclptr_map_;
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr pclptr_unk_;
 

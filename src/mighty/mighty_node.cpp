@@ -182,6 +182,10 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
   pub_trajectory_ =
       this->create_publisher<dynus_interfaces::msg::Trajectory>("trajectory", critical_qos);
   pub_mpc_path_ = this->create_publisher<dynus_interfaces::msg::SpeedyPath>("mpc_waypoints", 10);
+  if (par_.enable_spatial_temporal_pipeline) {
+    pub_spatial_temporal_cmd_ = this->create_publisher<dynus_interfaces::msg::VwCommandList>(
+        "spatial_temporal_cmd", 10);
+  }
   pub_goal_reached_ = this->create_publisher<std_msgs::msg::Empty>("goal_reached", critical_qos);
   pub_command_to_exec_time_ =
       this->create_publisher<std_msgs::msg::Float64>("command_to_exec_time", 10);
@@ -389,6 +393,18 @@ MIGHTY_NODE::MIGHTY_NODE() : Node("mighty_node") {
                   par_.expl_merge_radius_m, par_.expl_visit_radius_m);
     }
   }
+
+  if (par_.social_avoidance_enabled && par_.vehicle_type == "ground_robot")
+  {
+    pub_halt_ = this->create_publisher<dynus_interfaces::msg::Halt>(
+        "halt", 10);
+
+    const double rate_hz = 100.0; // 100Hz
+    const auto period = std::chrono::duration<double>(1.0 / rate_hz);
+    timer_halt_ = this->create_wall_timer(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+        std::bind(&MIGHTY_NODE::haltCallback, this));
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -435,6 +451,10 @@ void MIGHTY_NODE::declareParameters() {
 
   // Visual
   this->declare_parameter("visual_level", 1);
+
+  // Spatial-Temporal Planner pipeline (sim only)
+  this->declare_parameter("enable_spatial_temporal_pipeline", false);
+  this->declare_parameter("spatial_temporal_cmd_topic", std::string("spatial_temporal_cmd"));
 
   // Global planner parameters
   this->declare_parameter("file_path", "/home/kkondo/code/dynus_ws/src/dynus/data/data.txt");
@@ -520,6 +540,7 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("social_heat_sigma_x0", 2.0);
   this->declare_parameter("social_heat_sigma_y0", 1.0);
   this->declare_parameter("social_heat_d_sigma", 0.25);
+  this->declare_parameter("social_heat_r0", 0.6);
   this->declare_parameter("social_heat_d_r0", 0.06);
   this->declare_parameter("social_heat_robot_radius_m", 0.0);
   this->declare_parameter("social_heat_delta_x", 0.2);
@@ -615,6 +636,7 @@ void MIGHTY_NODE::declareParameters() {
   this->declare_parameter("social_avoidance_d_trigger", 1.0);
   this->declare_parameter("social_avoidance_min_repulsion_norm", 0.1);
   this->declare_parameter("social_avoidance_h", 1.0);
+  this->declare_parameter("social_avoidance_pedestrian_mu_threshold", 0.60);
 
   // Dynamic k_value parameters
   this->declare_parameter("num_replanning_before_adapt", 10);
@@ -783,6 +805,9 @@ void MIGHTY_NODE::setParameters() {
   // Visual level
   par_.visual_level = this->get_parameter("visual_level").as_int();
 
+  // Spatial-Temporal Planner pipeline (sim only)
+  par_.enable_spatial_temporal_pipeline = this->get_parameter("enable_spatial_temporal_pipeline").as_bool();
+
   // Global Planner parameters
   file_path_ = this->get_parameter("file_path").as_string();
   use_benchmark_ = this->get_parameter("use_benchmark").as_bool();
@@ -872,6 +897,7 @@ void MIGHTY_NODE::setParameters() {
   par_.social_heat_sigma_x0 = this->get_parameter("social_heat_sigma_x0").as_double();
   par_.social_heat_sigma_y0 = this->get_parameter("social_heat_sigma_y0").as_double();
   par_.social_heat_d_sigma = this->get_parameter("social_heat_d_sigma").as_double();
+  par_.social_heat_r0 = this->get_parameter("social_heat_r0").as_double();
   par_.social_heat_d_r0 = this->get_parameter("social_heat_d_r0").as_double();
   par_.social_heat_robot_radius_m = this->get_parameter("social_heat_robot_radius_m").as_double();
   par_.social_heat_delta_x = this->get_parameter("social_heat_delta_x").as_double();
@@ -969,6 +995,7 @@ void MIGHTY_NODE::setParameters() {
   par_.social_avoidance_d_trigger = this->get_parameter("social_avoidance_d_trigger").as_double();
   par_.social_avoidance_min_repulsion_norm = this->get_parameter("social_avoidance_min_repulsion_norm").as_double();
   par_.social_avoidance_h = this->get_parameter("social_avoidance_h").as_double();
+  par_.social_avoidance_pedestrian_mu_threshold = this->get_parameter("social_avoidance_pedestrian_mu_threshold").as_double();
 
   // Dynamic k_value parameters
   par_.num_replanning_before_adapt = this->get_parameter("num_replanning_before_adapt").as_int();
@@ -1447,6 +1474,21 @@ void MIGHTY_NODE::lookaheadPointCallback(const geometry_msgs::msg::PointStamped:
 // ----------------------------------------------------------------------------
 
 /**
+ * @brief Callback function for halt from pure pursuit controller
+ */
+void MIGHTY_NODE::haltCallback() {
+  dynus_interfaces::msg::Halt halt_msg;
+  bool to_halt;
+  mighty_ptr_->getHalt(to_halt);
+  halt_msg.to_halt = to_halt;
+  pub_halt_->publish(halt_msg);
+}
+
+// ----------------------------------------------------------------------------
+
+
+
+/**
  * @brief Callback function for replanning
  */
 void MIGHTY_NODE::replanCallback() {
@@ -1542,6 +1584,11 @@ void MIGHTY_NODE::replanCallback() {
   // Publish trajectory for tracking (increments trajectory_id on replan)
   if (replanning_result) {
     publishTrajectory();
+  }
+
+  // Publish raw global path for Spatial-Temporal Planner pipeline (sim only)
+  if (replanning_result && par_.enable_spatial_temporal_pipeline) {
+    publishSpatialTemporalCmd();
   }
 
   // Publish command-to-execution time (time from goal received to first trajectory)
@@ -1981,6 +2028,11 @@ void MIGHTY_NODE::convertDynTrajMsg2DynTraj(const dynus_interfaces::msg::DynTraj
     if (msg.mu.size() != 0)
     {
       traj->mu = mighty_utils::convertMuMsg2Mu(msg.mu); // IMM Mode probabilities
+    }
+
+    if (msg.use_mu)
+    {
+      traj->use_mu = msg.use_mu; // Whether to use IMM Mode probabilities
     }
 
     if (msg.function.size() == 3)
@@ -2718,6 +2770,55 @@ void MIGHTY_NODE::publishMpcPath() {
   path_msg.speeds = speeds;
 
   pub_mpc_path_->publish(path_msg);
+}
+
+// ----------------------------------------------------------------------------
+
+void MIGHTY_NODE::publishSpatialTemporalCmd() {
+  if (!pub_spatial_temporal_cmd_) return;
+
+  std::vector<double> v_cmds;
+  std::vector<double> w_cmds;
+  std::vector<double> yaws;
+  std::vector<double> xs;
+  std::vector<double> ys;
+  
+  mighty_ptr_->getSpatialTemporalPath(v_cmds, w_cmds, yaws, xs, ys);
+  if (v_cmds.empty()) return;
+  if (w_cmds.empty()) return;
+  if (yaws.empty()) return;
+  if (xs.empty()) return;
+  if (ys.empty()) return;
+
+  std::reverse(std::begin(v_cmds), std::end(v_cmds));
+  std::reverse(std::begin(w_cmds), std::end(w_cmds));
+  std::reverse(std::begin(yaws), std::end(yaws));
+  std::reverse(std::begin(xs), std::end(xs));
+  std::reverse(std::begin(ys), std::end(ys));
+
+  dynus_interfaces::msg::VwCommandList msg;
+  msg.header.stamp = this->now();
+  msg.header.frame_id = par_.map_frame_id;
+  msg.sequence_id = ++spatial_temporal_cmd_id_;
+
+  const int N = std::min({v_cmds.size(), w_cmds.size(), yaws.size(), xs.size(), ys.size()});
+  msg.commands.reserve(N);
+  for (int i = 0; i < N; ++i) {
+    dynus_interfaces::msg::Goal goal_msg;
+    goal_msg.p.x = xs[i];
+    goal_msg.p.y = ys[i];
+
+    // Only x matters
+    goal_msg.v.x = v_cmds[i];
+    goal_msg.v.y = 0.0;
+    goal_msg.v.z = 0.0;
+
+    goal_msg.yaw = yaws[i];
+    
+    goal_msg.dyaw = w_cmds[i];
+    msg.commands.push_back(goal_msg);
+  }
+  pub_spatial_temporal_cmd_->publish(msg);
 }
 
 

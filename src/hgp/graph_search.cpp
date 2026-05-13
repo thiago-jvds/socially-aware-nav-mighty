@@ -57,6 +57,22 @@ inline int GraphSearch::coordToId(int x, int y, int z) const {
   return x + y * xDim_ + z * xDim_ * yDim_;
 }
 
+inline long long GraphSearch::coordToId(int x, int y, int yaw_idx, int v_idx, int t_idx, int w_idx) const
+{
+    long long y_mult = (long long)xDim_;
+    long long yaw_mult = y_mult * (long long)yDim_;
+    long long v_mult = yaw_mult * (long long)NUM_ANGLES;
+    long long t_mult = v_mult * (long long)NUM_VELOCITIES;
+    long long w_mult = t_mult * (long long)NUM_ANGULAR_VELOCITIES;
+
+    return (long long)x + 
+           ((long long)y * y_mult) + 
+           ((long long)yaw_idx * yaw_mult) + 
+           ((long long)v_idx * v_mult) + 
+           ((long long)t_idx * t_mult) + 
+           ((long long)w_idx * w_mult);
+}
+
 inline bool GraphSearch::isFree(int x, int y, int z) const {
   return x >= 0 && x < xDim_ && y >= 0 && y < yDim_ && z >= 0 && z < zDim_ &&
          cMap_[coordToId(x, y, z)] <= val_free_;
@@ -77,6 +93,94 @@ inline double GraphSearch::getHeur(int x, int y, int z) const {
                           (z - zGoal_) * (z - zGoal_));
 }
 
+inline double GraphSearch::getHeur(const StatePtr &node) const
+{
+  // Keep heuristic purely positional to avoid early yaw commitment.
+  const double dist = std::sqrt((node->x - xGoal_) * (node->x - xGoal_) +
+                                (node->y - yGoal_) * (node->y - yGoal_));
+  double h = 3.0 * dist;
+  return h;
+
+}
+
+inline bool GraphSearch::withinReach(double x, double y, double target_x, double target_y, double reach_radius) const
+{
+  double distance = hypot2d(x - target_x, y - target_y);
+  return distance <= reach_radius;
+}
+
+double GraphSearch::getStateCost(const StatePtr &node, const StatePtr &parentNode) const
+{
+  // -------- Geometric distance cost --------
+  const double map_res = map_util_->getRes();
+  double dist_cells = std::sqrt(std::pow(node->cx - parentNode->cx, 2) + std::pow(node->cy - parentNode->cy, 2)) / map_res;
+  
+  // Penalizes geometric distance, encouraging shorter paths.
+  const double w_geometric = 0.0;
+  double geometric_cost = w_geometric * dist_cells;
+
+  // -------- Heading context (toward global goal) --------
+  const double goal_yaw = std::atan2(yGoal_ - node->y, xGoal_ - node->x);
+  double parent_heading_err = goal_yaw - parentNode->yaw;
+  while (parent_heading_err > M_PI)
+    parent_heading_err -= 2.0 * M_PI;
+  while (parent_heading_err < -M_PI)
+    parent_heading_err += 2.0 * M_PI;
+
+  double node_heading_err = goal_yaw - node->yaw;
+  while (node_heading_err > M_PI)
+    node_heading_err -= 2.0 * M_PI;
+  while (node_heading_err < -M_PI)
+    node_heading_err += 2.0 * M_PI;
+
+  const double abs_parent_heading_err = std::abs(parent_heading_err);
+  const double abs_node_heading_err = std::abs(node_heading_err);
+  const bool turning_is_helpful = (abs_node_heading_err + 1e-3 < abs_parent_heading_err);
+  
+  // -------- Rotational change cost --------
+  // Penalize turns much less when they improve heading toward goal.
+  const double w_rot_helpful = 0.03;
+  const double w_rot_unhelpful = 0.18;
+  
+  double yaw_change = std::abs(node->yaw - parentNode->yaw);
+  while (yaw_change > M_PI)
+    yaw_change -= 2.0 * M_PI;
+  while (yaw_change < -M_PI)
+    yaw_change += 2.0 * M_PI;
+  const double w_rot_eff = turning_is_helpful ? w_rot_helpful : w_rot_unhelpful;
+  double rotational_cost = w_rot_eff * std::abs(yaw_change);
+
+  // Penalize being misaligned to goal heading, but softly.
+  const double w_heading = 0.08;
+  double heading_cost = w_heading * abs_node_heading_err;
+  
+  // -------- Angular velocity magnitude penalty --------
+  // Discourage sustained turning unless the turn is helping heading correction.
+  const double w_ang_vel_mag_helpful = 0.08;
+  const double w_ang_vel_mag_unhelpful = 0.35;
+  const double w_ang_eff = turning_is_helpful ? w_ang_vel_mag_helpful : w_ang_vel_mag_unhelpful;
+  double ang_vel_mag_cost = w_ang_eff * std::abs(node->w_z);
+  
+  // -------- Number of step cost --------
+  // Penalizes large number of steps
+  const double w_num_steps = 0.35; 
+  double step_cost = w_num_steps * 1.0f;
+
+  // -------- Velocity smoothness cost --------
+  // Penalize both linear and angular velocity jumps between consecutive nodes,
+  // but keep angular-change penalty lower when turning is beneficial.
+  const double w_vel_lin_change = 0.35;
+  const double vel_lin_change_cost = w_vel_lin_change * std::abs(node->v_x - parentNode->v_x);
+
+  const double w_vel_ang_change_helpful = 0.22;
+  const double w_vel_ang_change_unhelpful = 0.85;
+  const double w_vel_ang_change = turning_is_helpful ? w_vel_ang_change_helpful : w_vel_ang_change_unhelpful;
+  const double vel_ang_change_cost = w_vel_ang_change * std::abs(node->w_z - parentNode->w_z);
+  double vel_change_cost = vel_lin_change_cost + vel_ang_change_cost;
+
+  return eps_ * geometric_cost + rotational_cost + heading_cost + ang_vel_mag_cost + step_cost + vel_change_cost;
+}
+
 bool GraphSearch::plan(int xStart, int yStart, int zStart, int xGoal, int yGoal, int zGoal,
                        double initial_g, double& global_planning_time, double& hgp_static_jps_time,
                        double& hgp_check_path_time, double& hgp_dynamic_astar_time,
@@ -86,6 +190,8 @@ bool GraphSearch::plan(int xStart, int yStart, int zStart, int xGoal, int yGoal,
   path_.clear();
   hm_.assign(xDim_ * yDim_ * zDim_, nullptr);
   seen_.assign(xDim_ * yDim_ * zDim_, false);
+  dyn_hm_.clear();
+  dyn_seen_.clear();
 
   start_vel_ = start_vel;
 
@@ -132,6 +238,7 @@ bool GraphSearch::select_planner(StatePtr& currNode_ptr, int max_expand, int sta
   //  - sjps         : JPS successors (getJpsSucc)
   //  - astar        : A* grid successors (getSucc) with NO heat
   //  - astar_heat   : A* grid successors (getSucc) WITH heat
+  //  - 6d_planner    : 6D planner with heat and start velocity alignment (get6DSucc)
   use_jps_ = false;
   use_heat_ = false;
 
@@ -143,6 +250,20 @@ bool GraphSearch::select_planner(StatePtr& currNode_ptr, int max_expand, int sta
   } else if (global_planner_ == "astar_heat") {
     use_heat_ = true;
     return static_jps_plan(currNode_ptr, max_expand, start_id, goal_id, timeout_duration);
+  } else if (global_planner_ == "6d_planner") {
+   
+    // Allow time and 2D
+    int tDim_ = 201; // fallback
+    if (map_util_)
+    {
+      // Match planner time dimension to temporal map horizon.
+      tDim_ = std::max(1, map_util_->getTemporalNumSteps());
+    }
+
+    // ensure 2Hz plan
+    std::chrono::milliseconds reduced_timeout = std::chrono::milliseconds(10000);
+    int inf_max_expand = 0;
+    return kollwitz_plan(currNode_ptr, inf_max_expand, start_id, goal_id, reduced_timeout, tDim_);
   } else {
     printf("Unknown planner: %s\n", global_planner_.c_str());
     return false;
@@ -271,6 +392,181 @@ bool GraphSearch::static_jps_plan(StatePtr& currNode_ptr, int max_expand, int st
   path_ = recoverPath(currNode_ptr, start_id);
 
   return true;
+}
+
+bool GraphSearch::kollwitz_plan(StatePtr& currNode_ptr, int max_expand, int start_id, int goal_id,
+                                 std::chrono::milliseconds timeout_duration, int tDim) {
+  v_cmds_.clear();
+  w_cmds_.clear();
+  yaws_.clear();
+  xs_.clear();
+  ys_.clear();
+
+  // Record the start time
+  auto start_time = std::chrono::steady_clock::now();
+
+  if (!currNode_ptr)
+  {
+    std::cerr << "Error: currNode_ptr is null!" << std::endl;
+    return false;
+  } 
+
+  // Insert start node  
+  // Convert grid indices to world coordinates using proper map origin offset
+  double map_res = map_util_->getRes();
+  currNode_ptr->cx = 0.0;
+  currNode_ptr->cy = 0.0;
+
+  // Assuming start_vel_ from plan() gives us initial kinematics
+  currNode_ptr->v_x = start_vel_.norm(); 
+  currNode_ptr->yaw = (currNode_ptr->v_x > 0.01) ? std::atan2(start_vel_[1], start_vel_[0]) : 0.0;
+  currNode_ptr->w_z = 0.0; // Initial rotational velocity
+
+  // Discretize the start state
+  currNode_ptr->yawIdx = discretizeYaw(currNode_ptr->yaw);
+  currNode_ptr->vIdx = discretizeVelocity(currNode_ptr->v_x);
+  currNode_ptr->tIdx = 0;
+  currNode_ptr->wIdx = discretizeAngularVelocity(currNode_ptr->w_z);
+
+  // Generate the massive 64-bit ID
+  currNode_ptr->dynId = coordToId(currNode_ptr->x, currNode_ptr->y, currNode_ptr->yawIdx, currNode_ptr->vIdx, currNode_ptr->tIdx, currNode_ptr->wIdx);
+
+  // Get start dyn ID
+  long long start_dyn_id = currNode_ptr->dynId;
+
+  // Register root node in the dynamic memory map
+  dyn_hm_[currNode_ptr->dynId] = currNode_ptr;
+  dyn_seen_[currNode_ptr->dynId] = true;
+  currNode_ptr->t = 0.0;
+  currNode_ptr->heapkey = pq_.push(currNode_ptr);
+  currNode_ptr->opened = true;
+
+  int expand_iteration = 0;
+  cMap_ = (map_util_->map_).data();
+
+  // Decode the goal X and Y 
+  // int target_x = goal_id % xDim_;
+  // int target_y = (goal_id / xDim_) % yDim_;
+  // const Veci<3> goal_int = Veci<3>(target_x, target_y, 0);
+  // const Vecf<3> goal_world = map_util_->intToFloat(goal_int);
+  
+  double c_target_x = goal_[0];
+  double c_target_y = goal_[1];
+
+  // Track the best (closest-to-goal) node for partial path recovery
+  StatePtr best_node = currNode_ptr;
+  double best_h = currNode_ptr->h;
+
+  while (true)
+  {
+    expand_iteration++;
+
+    // Check if timeout has occurred
+    auto current_time = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time) > timeout_duration)
+    {
+      std::cerr << "Timeout occurred in 6d_planner. Exiting safely.\n";
+      path_ = recoverPath(best_node, start_dyn_id);
+      return true;
+    }
+
+    if (pq_.empty())
+    {
+      std::cerr << "Error: Priority queue is empty in 6d_planner!" << std::endl;
+      path_ = recoverPath(best_node, start_dyn_id);
+      return true;
+    }
+
+    // Explore node with lowest f-value
+    currNode_ptr = pq_.top();
+    pq_.pop();
+    currNode_ptr->closed = true; // Add to closed list
+
+    // Update best node (closest to goal by heuristic)
+    if (currNode_ptr->h < best_h) {
+      best_h = currNode_ptr->h;
+      best_node = currNode_ptr;
+    }
+
+    // Reached goal
+    if (withinReach(currNode_ptr->cx, currNode_ptr->cy, c_target_x, c_target_y, 1.0))
+    {
+      if (verbose_)
+      {
+        printf("6d_planner: goal reached, expand_iteration=%d\n", expand_iteration);
+      }
+      path_ = recoverPath(currNode_ptr, start_dyn_id);
+      return true;
+    }
+
+    // Get successors with heat cost
+    std::vector<long long> succ_ids;
+    std::vector<double> succ_costs, succ_times;
+    getDynamicSucc(currNode_ptr, succ_ids, succ_costs, succ_times, tDim);
+
+    // Process successors
+    for (unsigned int s = 0; s < succ_ids.size(); ++s)
+    {
+      long long succ_id = succ_ids[s];
+
+      if (succ_id < 0)
+        continue;
+
+      // Get child
+      StatePtr &child_ptr = dyn_hm_[succ_id];
+      if (!child_ptr)
+      {
+        // Convert id to coordinates
+        int child_x = succ_id % xDim_;
+        int child_y = (succ_id / xDim_) % yDim_;
+
+        // For dynamic planner, z = t dimension
+        int child_t = succ_id / (xDim_ * yDim_);
+
+        child_ptr = std::make_shared<State>(succ_id, child_x, child_y, child_t, 0, 0, 0);
+        child_ptr->h = getHeur(child_x, child_y, child_t);
+      }
+
+      if (child_ptr->closed)
+        continue;
+
+      // Calculate tentative g value
+      double tentative_gval = currNode_ptr->g + succ_costs[s];
+
+      if (tentative_gval < child_ptr->g)
+      {
+        child_ptr->dynParentId = currNode_ptr->dynId;
+        child_ptr->g = tentative_gval;
+        child_ptr->t = currNode_ptr->t + succ_times[s];
+
+        child_ptr->dx = child_ptr->x - currNode_ptr->x;
+        child_ptr->dy = child_ptr->y - currNode_ptr->y;
+
+        // If currently in OPEN, update
+        if (child_ptr->opened && !child_ptr->closed)
+        {
+          pq_.increase(child_ptr->heapkey);
+        }
+        else // New node, add to heap
+        {
+          child_ptr->heapkey = pq_.push(child_ptr);
+          child_ptr->opened = true;
+        }
+      }
+    }
+
+    if (max_expand > 0 && expand_iteration >= max_expand)
+    {
+      if (verbose_)
+      {
+        printf("6d_planner: max_expand [%d] reached\n", max_expand);
+      }
+      currNode_ptr = pq_.top(); // Get the best node at the time of stopping
+      path_ = recoverPath(currNode_ptr, start_dyn_id);
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<StatePtr> GraphSearch::removeLinePts(const std::vector<StatePtr>& path) {
@@ -547,6 +843,34 @@ std::vector<StatePtr> GraphSearch::recoverPath(StatePtr node, int start_id) {
   return path;
 }
 
+std::vector<StatePtr> GraphSearch::recoverPath(StatePtr node, long long start_dyn_id)
+{
+  std::vector<StatePtr> path;
+  path.push_back(node);
+  while (node && node->dynId != start_dyn_id)
+  {
+    auto parent_it = dyn_hm_.find(node->dynParentId);
+    if (parent_it != dyn_hm_.end())
+    {
+      node = parent_it->second;
+      v_cmds_.push_back(node->v_x);
+      w_cmds_.push_back(node->w_z);
+      yaws_.push_back(node->yaw);
+      xs_.push_back(node->cx);
+      ys_.push_back(node->cy);
+      path.push_back(node);
+    }
+    else
+    {
+      std::cerr << "[Error] recoverPath: Parent ID " << node->dynParentId 
+                << " not found in dyn_hm_! Map might be corrupted." << std::endl;
+      break;
+    }
+  }
+
+  return path;
+}
+
 void GraphSearch::getSucc(const StatePtr& curr, std::vector<int>& succ_ids,
                           std::vector<double>& succ_costs, bool use_heat) {
   succ_ids.clear();
@@ -728,6 +1052,233 @@ void GraphSearch::getJpsSucc(const StatePtr& curr, std::vector<int>& succ_ids,
   }
 }
 
+void GraphSearch::getDynamicSucc(
+  const StatePtr &curr, std::vector<long long> &succ_ids, std::vector<double> &succ_costs, std::vector<double> &succ_times, int tDim)
+{
+  succ_ids.clear();
+  succ_costs.clear();
+  succ_times.clear();
+
+  // --- Build a forward reference once per node ---
+  // Prefer start_vel_ when available; if it's anti-aligned with goal, flip it.
+  Eigen::Vector2d vref(start_vel_(0), start_vel_(1));
+  if (vref.squaredNorm() < 1e-9)
+  {
+    vref = Eigen::Vector2d(goal_(0) - start_(0), goal_(1) - start_(1));
+  }
+  else
+  {
+    Eigen::Vector2d vg(goal_(0) - start_(0), goal_(1) - start_(1));
+    if (vg.squaredNorm() > 1e-9 && vref.dot(vg) < 0.0)
+      vref = -vref; // never bias away from goal
+  }
+
+  const double time_res = map_util_->getTimeRes();
+  const double map_res = map_util_->getRes();
+
+  std::vector<double> linear_accels = {-1.0, 0.0, 1.0};
+  std::vector<double> angular_accels = {-1.0, 0.0, 1.0};
+  int new_z = curr->z;
+
+  for (double a_x : linear_accels)
+  {
+    for (double a_z : angular_accels)
+    {
+      // ======= FIND NEIGHBORING STATE =======
+      double new_v_x = curr->v_x + (a_x * time_res);
+      double new_w_z = curr->w_z + (a_z * time_res);
+
+      // Verify velocities to physical limits
+      if (new_v_x < (double)-0.01 || new_v_x > v_max_ || fabs(new_w_z) > w_max_)
+        continue;
+
+      double da_x = (new_v_x - curr->v_x) / time_res;
+      if (std::abs(da_x) > a_max_ + 1e-6) continue;  // Not achievable acceleration
+
+      double da_z = (new_w_z - curr->w_z) / time_res;
+      if (std::abs(da_z) > 3.14) continue;  // Angular acceleration constraint (or parameterize)
+
+      double new_cx, new_cy, new_yaw;
+      
+      if (fabs(new_w_z) > 1e-6)
+      {
+        // If turning
+        double arc_radius = new_v_x / new_w_z;
+        new_cx = curr->cx + arc_radius * (-std::sin(curr->yaw) + std::sin(curr->yaw + new_w_z * time_res));
+        new_cy = curr->cy + arc_radius * ( std::cos(curr->yaw) - std::cos(curr->yaw + new_w_z * time_res));
+        new_yaw = wrapPi(curr->yaw + new_w_z * time_res);
+      }
+      else 
+      {
+        // Angular velocity is zero, move straight
+        new_cx = curr->cx + new_v_x * std::cos(curr->yaw) * time_res;
+        new_cy = curr->cy + new_v_x * std::sin(curr->yaw) * time_res;
+        new_yaw = wrapPi(curr->yaw);
+      }
+      // ===============================================
+      
+      // Swept collision checking: trace path and only check new grid cells
+      bool static_collision = false;
+      bool dynamic_collision = false;
+      double temporal_cost = 0.0;
+      double temporal_max_cell_cost = 0.0;
+      int temporal_hits = 0;
+      int samples_checked = 0;
+      int prev_x = std::round(curr->cx / map_res);
+      int prev_y = std::round(curr->cy / map_res);
+      
+      const double check_time_step = time_res / 10.0;  // Sweep with finer granularity
+      const double arc_radius = (fabs(new_w_z) > 1e-6) ? new_v_x / new_w_z : 0.0;
+      const double cos_curr_yaw = std::cos(curr->yaw);
+      const double sin_curr_yaw = std::sin(curr->yaw);
+      const double next_t = curr->t + time_res;
+      int new_t_idx = std::max(0, std::min(tDim - 1,
+                          (int)std::floor(next_t / std::max(1e-6, time_res))));
+      const int num_interp_checks = std::max(1, (int)std::ceil(time_res / check_time_step));
+      
+      // Interpolation loop
+      for (int i = 1; i <= num_interp_checks && !static_collision && !dynamic_collision; i++)
+      {
+        double t = std::min(time_res, i * check_time_step);
+        double check_cx, check_cy;
+        
+        if (fabs(new_w_z) > 1e-6)
+        {
+          double interp_yaw = curr->yaw + new_w_z * t;
+          check_cx = curr->cx + arc_radius * (-sin_curr_yaw + std::sin(interp_yaw));
+          check_cy = curr->cy + arc_radius * (cos_curr_yaw - std::cos(interp_yaw));
+        }
+        else
+        {
+          check_cx = curr->cx + new_v_x * cos_curr_yaw * t;
+          check_cy = curr->cy + new_v_x * sin_curr_yaw * t;
+        }
+        
+        int check_x = std::round(check_cx / map_res);
+        int check_y = std::round(check_cy / map_res);
+
+        // Only check when entering a new grid cell
+        if (check_x != prev_x || check_y != prev_y)
+        {
+          samples_checked++;
+
+          // Static check
+          if (map_util_ && map_util_->has2DMap() && zDim_ == 1 && esdf_grid_) {
+            // ESDF mode: only check the 2D ESDF-derived map (skip inflated 3D grid)
+            if (map_util_->get2DOccupancy(check_x, check_y) != 0) {
+              static_collision = true;
+            }
+          } 
+
+          // Dynamic check
+          if (map_util_)
+          {
+            const int check_t_idx = std::max(0, std::min(tDim - 1,
+                (int)std::floor((curr->t + t) / std::max(1e-6, time_res))));
+            double cell_temp_cost = map_util_->getTemporalCost(check_x, check_y, new_z, check_t_idx);
+            if (cell_temp_cost < 0.0f)
+            {
+              dynamic_collision = true;
+            }
+            else
+            {
+              temporal_cost += cell_temp_cost; // Accumulate the costs over the trajectory
+              temporal_max_cell_cost = std::max(temporal_max_cell_cost, cell_temp_cost);
+              if (cell_temp_cost > 0.0)
+              {
+                temporal_hits++;
+              }
+            }
+          }
+
+          // Update for next iteration
+          prev_x = check_x;
+          prev_y = check_y; 
+        }
+      }
+      
+      if (static_collision || dynamic_collision)
+      {
+        std::cerr << "[Info] Successor at (" << new_cx << ", " << new_cy << ") has collision: "
+                  << (static_collision ? "static " : "") << (dynamic_collision ? "dynamic " : "")
+                  << "| Temporal cost: " << temporal_cost << ", max cell cost: " << temporal_max_cell_cost
+                  << ", hits: " << temporal_hits << ", samples: " << samples_checked << std::endl;
+        continue;
+      }
+
+      // Map back to the discrete grid for final state mapping
+      int new_x = std::round(new_cx / map_res);
+      int new_y = std::round(new_cy / map_res);
+
+
+      if (new_x != prev_x || new_y != prev_y)
+      {
+        // Occupancy check
+        if (map_util_ && map_util_->has2DMap() && zDim_ == 1 && esdf_grid_) {
+          // ESDF mode: only check the 2D ESDF-derived map (skip inflated 3D grid)
+          if (map_util_->get2DOccupancy(new_x, new_y) != 0) {
+            continue;
+          }
+        }
+      }
+
+      // Discretize the new state for hashing and storage
+      int new_yaw_idx = discretizeYaw(new_yaw);
+      int new_v_idx = discretizeVelocity(new_v_x);
+      int new_w_idx = discretizeAngularVelocity(new_w_z);
+      
+      long long new_dyn_id = coordToId(new_x, new_y, new_yaw_idx, new_v_idx, new_t_idx, new_w_idx);
+
+      if (new_dyn_id < 0)
+        continue;
+
+      if (!dyn_seen_[new_dyn_id])
+      {
+        dyn_seen_[new_dyn_id] = true;
+        dyn_hm_[new_dyn_id] = std::make_shared<State>(new_dyn_id, new_x, new_y, new_t_idx, new_yaw_idx, new_v_idx, new_w_idx);
+        if (new_dyn_id < 0)
+        {
+          fprintf(stderr, "[BUG] Creation failed id=%lld\n", new_dyn_id);
+          std::abort();
+        }
+        // Continuous state variables
+        dyn_hm_[new_dyn_id]->cx = new_cx;
+        dyn_hm_[new_dyn_id]->cy = new_cy;
+        dyn_hm_[new_dyn_id]->v_x = new_v_x;
+        dyn_hm_[new_dyn_id]->w_z = new_w_z;
+        dyn_hm_[new_dyn_id]->yaw = new_yaw;
+        
+        // Discrete indices
+        dyn_hm_[new_dyn_id]->wIdx = new_w_idx;
+        dyn_hm_[new_dyn_id]->vIdx = new_v_idx;
+        dyn_hm_[new_dyn_id]->tIdx = new_t_idx;
+        dyn_hm_[new_dyn_id]->yawIdx = new_yaw_idx;
+        
+        dyn_hm_[new_dyn_id]->h = getHeur(dyn_hm_[new_dyn_id]);
+      }
+    
+      // -------- State cost (includes geometric, rotational, and time penalties) --------
+      double state_cost = getStateCost(dyn_hm_[new_dyn_id], curr);
+
+      // -------- Temporal cost (similar to heat) --------
+       const float w_temporal = map_util_ ? map_util_->getTemporalWeight() : 0.0f;
+      const double temporal_cost_scaled = temporal_cost * w_temporal; // scale temporal cost by weight
+
+      // -------- Unknown cell penalty --------
+      if (w_unknown_ > 0.0 && isUnknown(new_x, new_y, new_z)) {
+        state_cost += w_unknown_;
+      }
+
+      // Accumulate all costs
+      double step_cost = state_cost + temporal_cost_scaled;
+    
+      succ_ids.push_back(new_dyn_id);
+      succ_costs.push_back(step_cost);
+      succ_times.push_back(time_res);
+    }
+  }
+}
+
 bool GraphSearch::jump(int x, int y, int z, int dx, int dy, int dz, int& new_x, int& new_y,
                        int& new_z) {
   new_x = x + dx;
@@ -797,6 +1348,16 @@ inline bool GraphSearch::hasForced(int x, int y, int z, int dx, int dy, int dz) 
 }
 
 std::vector<StatePtr> GraphSearch::getPath() const { return path_; }
+
+std::vector<double> GraphSearch::getVCmds() const { return v_cmds_; }
+
+std::vector<double> GraphSearch::getWCmds() const { return w_cmds_; }
+
+std::vector<double> GraphSearch::getYaws() const { return yaws_; }
+
+std::vector<double> GraphSearch::getXs() const { return xs_; }
+
+std::vector<double> GraphSearch::getYs() const { return ys_; }
 
 std::vector<StatePtr> GraphSearch::getOpenSet() const {
   std::vector<StatePtr> ss;

@@ -150,11 +150,16 @@ class HGPManager {
    *  @param current_time Current simulation time for dynamic cost evaluation.
    *  @param path Output simplified path.
    *  @param raw_path Output raw path before simplification.
+   *  @param v_cmds_out Output velocity commands for ground robot (if applicable).
+   *  @param w_cmds_out Output angular velocity commands for ground robot (if applicable)
+   *  @param yaws_out Output yaw angles for ground robot (if applicable) 
+   *  @param xs_out Output x coordinates of the path (if applicable)
+   *  @param ys_out Output y coordinates of the path (if applicable)
    *  @return True if a valid path was found.
    */
   bool solveHGP(const Vec3f& start_sent, const Vec3f& start_vel, const Vec3f& goal_sent,
                 double& final_g, double weight, double current_time, vec_Vecf<3>& path,
-                vec_Vecf<3>& raw_path);
+                vec_Vecf<3>& raw_path, std::vector<double>& v_cmds_out, std::vector<double>& w_cmds_out, std::vector<double>& yaws_out, std::vector<double>& xs_out, std::vector<double>& ys_out);
 
   /** @brief Truncate a path to include only waypoints in free space.
    *  @param path Input path to check.
