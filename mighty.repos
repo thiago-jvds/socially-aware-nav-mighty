@@ -2,12 +2,12 @@ repositories:
   # ROS 2 dependencies (build with colcon in mighty_ws)
   acl-mapping:
     type: git
-    url: https://gitlab.com/mit-acl/lab/acl-mapping.git
-    version: 0d3875daf29d163a35c19d356c4652a749ed501d
+    url: https://github.com/thiago-jvds/socially-aware-nav-acl-mapping.git
+    version: c696249e0b5d0c469e6c73505328ba52c0701670
   dynus_interfaces:
     type: git
-    url: https://github.com/kotakondo/dynus_interfaces.git
-    version: c43bcec6d4b67c6f8a8baabb1b2f8c1ba8b919d1
+    url: https://github.com/thiago-jvds/socially-aware-nav-msgs.git
+    version: 0d362c3ea09642dce6de5af1fa5ae47a4658d59a
   gazebo_ros_pkgs:
     type: git
     url: https://github.com/kotakondo/gazebo_ros_pkgs.git
