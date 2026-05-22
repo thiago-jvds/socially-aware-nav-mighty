@@ -29,7 +29,7 @@ public:
         // Specific topics to subscribe to
         this->declare_parameter<std::vector<std::string>>(
             "target_obstacles", 
-            {"/Lucas6", "/HELMET3"}
+            {"/HELMET1", "/HELMET3"}
         );
         std::vector<std::string> target_topics = this->get_parameter("target_obstacles").as_string_array();
 
